@@ -1,9 +1,9 @@
 import logging
 from pydbus import SystemBus
 from gi.repository import GLib
+from utils import get_logger
 
-logger = logging.getLogger("devonlinux")
-logger.setLevel(logging.DEBUG)
+logger = get_logger()
 
 class MiracleDbus:
     def __init__(self):
@@ -60,7 +60,10 @@ class MiracleDbus:
             signal="PropertiesChanged",
             signal_fired=lambda s, o, i, sig, params: handle_props(*params, path=o)
         )
-        
+
+    def print_logs_dbus(path, iface, props, invalid=None):
+        print(f"[CALLBACK/PROP CHANGED] Path: {path}, Interface: {iface}, Properties/Changed: {props}")
+
     def run_loop(self):
         logging.info("Listening for DBus events from miracle-wifi (CTRL+C to exit)...")
         self.loop.run()
