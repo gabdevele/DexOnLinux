@@ -1,0 +1,5 @@
+ptyprocess==0.7.0
+pycairo==1.28.0
+pydbus==0.6.0
+PyGObject==3.54.2
+sh==2.2.2
