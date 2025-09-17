@@ -9,19 +9,19 @@ logger = get_logger()
 class Commands:
     def __init__(self, sudo_password):
         self.sudo_password = sudo_password + "\n"
-        if not self.check_sudo_password():
+        if not self._check_sudo_password():
             exit(1)
-        self.systemctl = self.get_command("systemctl")
-        self.miracle_wifi = self.get_command("miracle-wifid")
-        self.miracle_sinkctl = self.get_command("miracle-sinkctl", auto_psw=False)
-        self.scrcpy = self.get_command("scrcpy", need_sudo=False)
-        self.adb = self.get_command("adb")
-        self.pkill = self.get_command("pkill")
+        self.systemctl = self._get_command("systemctl")
+        self.miracle_wifi = self._get_command("miracle-wifid")
+        self.miracle_sinkctl = self._get_command("miracle-sinkctl", auto_psw=False)
+        self.scrcpy = self._get_command("scrcpy", need_sudo=False)
+        self.adb = self._get_command("adb")
+        self.pkill = self._get_command("pkill")
 
         if not all([self.systemctl, self.miracle_sinkctl, self.miracle_wifi, self.scrcpy, self.adb, self.pkill]):
             exit(1)
 
-    def check_sudo_password(self) -> bool:
+    def _check_sudo_password(self) -> bool:
         try:
             sh.sudo("-k", "-S", "true", _in=self.sudo_password) #-k to invalid previous authentications
             return True
@@ -29,7 +29,7 @@ class Commands:
             logger.error("Incorrect sudo password.")
             return False
         
-    def get_command(self, cmd_name: str, need_sudo: bool = True, auto_psw: bool = True) -> Optional[sh.Command]:
+    def _get_command(self, cmd_name: str, need_sudo: bool = True, auto_psw: bool = True) -> Optional[sh.Command]:
         try:
             cmd = sh.Command(cmd_name)
             if not need_sudo: 
@@ -67,20 +67,20 @@ class Commands:
             logger.error(f"Error starting miracle-wifid: {e}")
             return None
 
-    def sinkctl_interact(self, commands: Queue, out: str, stdin: Queue):
-        while not commands.empty():
-            command = commands.get()
-            stdin.put(command + "\n")
-            logger.debug(f"Sent command to miracle-sinkctl: {command}")
-
     def start_miracle_sinkctl(self, interface_index: int, background: bool = True) -> Optional[sh.RunningCommand]:
+        def interact(commands: Queue, stdin: Queue):
+            while not commands.empty():
+                command = commands.get()
+                stdin.put(command + "\n")
+                logger.debug(f"Sent command to miracle-sinkctl: {command}")
+
         commands = Queue()
         commands.put(f"set-managed {interface_index} yes")
         commands.put(f"run {interface_index}")
         try:
             process = self.miracle_sinkctl("--external-player", "true", "--port", "1991", "--audio", "1", 
                                           _bg=background,
-                                          _out=lambda out, stdin: self.sinkctl_interact(commands, out, stdin),
+                                          _out=lambda _, stdin: interact(commands, stdin),
                                           _tty_in=True, _err_to_out=True)
             process.process.stdin.put(self.sudo_password)
             logger.debug("miracle-sinkctl started.")
