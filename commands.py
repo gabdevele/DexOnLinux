@@ -114,11 +114,10 @@ class Commands:
         return p2pwifi
 
     def list_adb_devices(self) -> List[str]:
-        #TODO: handle adb server not running
         try:
             result = self.adb("devices", _err_to_out=True)
-            lines = result.strip().splitlines()[1:]
-            devices = [line.split()[0] for line in lines if "device" in line]
+            lines = result.strip().splitlines()
+            devices = [line.split()[0] for line in lines if "device" in line and not "List" in line]
             return devices
         except Exception as e:
             logger.error(f"Error listing ADB devices: {e}")
