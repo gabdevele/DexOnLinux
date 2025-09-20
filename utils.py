@@ -1,6 +1,10 @@
-import logging
+import logging, os
 from typing import List, Optional
 from colorama import Fore, Style
+
+
+def colored(text: str, color: str, style: str = "") -> str:
+    return color + style + text + Style.RESET_ALL
 
 class CustomFormatter(logging.Formatter):
     #straight from: https://stackoverflow.com/questions/384076/
@@ -12,11 +16,11 @@ class CustomFormatter(logging.Formatter):
     format = "[%(levelname)s] (%(name)s) - %(message)s (%(filename)s:%(lineno)d)"
 
     FORMATS = {
-        logging.DEBUG: grey + format + reset,
-        logging.INFO: grey + format + reset,
-        logging.WARNING: yellow + format + reset,
-        logging.ERROR: red + format + reset,
-        logging.CRITICAL: bold_red + format + reset
+        logging.DEBUG: colored(format, grey),
+        logging.INFO: colored(format, grey),
+        logging.WARNING: colored(format, yellow),
+        logging.ERROR: colored(format, red),
+        logging.CRITICAL: colored(format, bold_red)
     }
 
     def format(self, record):
@@ -31,9 +35,6 @@ logger = logging.getLogger("dexonlinux")
 logger.setLevel(logging.DEBUG)
 logger.addHandler(handler)
 logger.propagate = False
-
-def colored(text: str, color: str, style: str = "") -> str:
-    return color + style + text + Style.RESET_ALL
 
 def get_logger() -> logging.Logger:
     return logger
@@ -74,7 +75,6 @@ def select_from_list(items: List[str], prompt: str = "Select an item:", input_pr
         logger.error("Please enter a valid number.")
         return None
 
-
 def error_exit(message: str, enable_network: bool = False, commands = None) -> None:
     logger.error(message)
     if enable_network and commands:
@@ -82,8 +82,5 @@ def error_exit(message: str, enable_network: bool = False, commands = None) -> N
         commands.enable_network_services()
     exit(1)
 
-
-
-
-
-
+def get_app_path() -> str:
+    return os.path.dirname(os.path.realpath(__file__))

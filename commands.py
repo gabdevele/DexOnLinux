@@ -1,8 +1,8 @@
-import sh, logging
+import sh, os
 from pathlib import Path
 from typing import Optional, List
 from queue import Queue
-from utils import get_logger
+from utils import get_logger, get_app_path
 
 logger = get_logger()
 
@@ -13,8 +13,8 @@ class Commands:
             exit(1)
         self.systemctl = self._get_command("systemctl")
         self.miracle_wifi = self._get_command("miracle-wifid")
-        self.miracle_sinkctl = self._get_command("miracle-sinkctl", auto_psw=False)
-        self.scrcpy = self._get_command("scrcpy", need_sudo=False)
+        self.miracle_sinkctl = self._get_command("miracle-sinkctl", auto_psw=False) #need interactive input
+        self.scrcpy = self._get_command("scrcpy", need_sudo=False) #does not work with sudo
         self.adb = self._get_command("adb")
         self.pkill = self._get_command("pkill")
 
@@ -133,6 +133,7 @@ class Commands:
     def run_scrcpy(self, selected_device: str) -> Optional[sh.RunningCommand]:
         #handles multiple devices: https://github.com/Genymobile/scrcpy/issues/400
         try:
+            os.environ["SCRCPY_ICON_PATH"] = get_app_path() + "/icon.png" #TODO: currently not working on my ubuntu, could be cache issue?
             return self.scrcpy("-s", selected_device, "--display-id", "2", "--window-title", "DexOnLinux",
                             "--fullscreen", "--mouse-bind=++++", _bg=True, _err_to_out=True, _out=logger.debug)
         except Exception as e:
