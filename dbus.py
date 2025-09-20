@@ -61,9 +61,6 @@ class MiracleDbus:
             signal_fired=lambda s, o, i, sig, params: handle_props(*params, path=o)
         )
 
-    def print_logs_dbus(path, iface, props, invalid=None):
-        logger.debug(f"[CALLBACK/PROP CHANGED] Path: {path}, Interface: {iface}, Properties/Changed: {props}")
-
     def run_loop(self):
         logger.info("Listening for DBus events from miracle-wifi (CTRL+C to exit)...")
         self.loop.run()

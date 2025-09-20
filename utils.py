@@ -82,5 +82,15 @@ def error_exit(message: str, enable_network: bool = False, commands = None) -> N
         commands.enable_network_services()
     exit(1)
 
+def print_instructions() -> None:
+    print(f"\n1. Open {colored('Dex', Fore.CYAN, Style.BRIGHT)} on your device and connect to "
+      f"{colored('Miracle', Fore.CYAN, Style.BRIGHT)}.")
+
+    print(f"2. Connect your device to your PC via {colored('USB', Fore.GREEN, Style.BRIGHT)} "
+        f"and enable {colored('USB Debugging', Fore.YELLOW, Style.BRIGHT)} in the developer options.")
+
+    print(f"3. After connecting, press {colored('Enter', Fore.RED, Style.BRIGHT)} "
+        f"and check if it is listed.\n")
+
 def get_app_path() -> str:
     return os.path.dirname(os.path.realpath(__file__))
