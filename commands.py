@@ -126,8 +126,11 @@ class Commands:
     def kill_miracle(self) -> None:
         #could just use pkill("miracle", _bg=True) but what if
         #there are other processes with miracle in their name?
-        self.pkill("miracle-wifid", _bg=True)
-        self.pkill("miracle-sinkctl", _bg=True)
+        try:
+            self.pkill("miracle-wifid")
+            self.pkill("miracle-sinkctl")
+        except:
+            pass
         logger.debug("Killed miracle-wifid and miracle-sinkctl processes.")
 
     def run_scrcpy(self, selected_device: str) -> Optional[sh.RunningCommand]:

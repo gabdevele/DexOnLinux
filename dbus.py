@@ -1,7 +1,7 @@
-import logging
 from pydbus import SystemBus
 from gi.repository import GLib
 from utils import get_logger
+from typing import Optional, Callable, List
 
 logger = get_logger()
 
@@ -12,14 +12,14 @@ class MiracleDbus:
         self.service = "org.freedesktop.miracle.wifi"
         self.loop = GLib.MainLoop()
 
-    def bus_exists(self):
+    def bus_exists(self) -> bool:
         try:
             self.bus.get(self.service, self.root_path)
             return True
         except Exception:
             return False
 
-    def get_links(self):
+    def get_links(self) -> List[str]:
         try:
             wifi = self.bus.get(self.service, self.root_path)
             objects = wifi.GetManagedObjects()
@@ -27,17 +27,17 @@ class MiracleDbus:
             return links
         except Exception:
             return []
-        
-    def get_interface_index(self, link_path):
+
+    def get_interface_index(self, link_path: str) -> Optional[int]:
         try:
             link = self.bus.get(self.service, link_path)
             return link.InterfaceIndex
         except Exception as e:
             logger.debug(f"Error reading InterfaceIndex of {link_path}: {e}")
             return None
-        
-    def on_peer_event(self, callback):
-        def handle_added(path, ifaces_and_props):
+
+    def on_peer_event(self, callback: Callable):
+        def handle_added(path: str, ifaces_and_props: dict):
             for iface, props in ifaces_and_props.items():
                 if "Peer" in iface:
                     callback(path, iface, props)
@@ -50,8 +50,8 @@ class MiracleDbus:
             signal_fired=lambda s, o, i, sig, params: handle_added(*params)
         )
 
-    def subscribe_properties_changed(self, callback):
-        def handle_props(interface_name, changed, invalidated, path=None):
+    def subscribe_properties_changed(self, callback: Callable):
+        def handle_props(interface_name: str, changed: dict, invalidated: List[str], path: str = None):
             callback(path, interface_name, changed, invalidated)
 
         self.bus.subscribe(
@@ -62,5 +62,5 @@ class MiracleDbus:
         )
 
     def run_loop(self):
-        logger.info("Listening for DBus events from miracle-wifi (CTRL+C to exit)...")
+        logger.debug("Starting GLib main loop to listen for DBus events from miracle-wifi...")
         self.loop.run()

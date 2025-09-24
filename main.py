@@ -1,7 +1,7 @@
 from commands import Commands
 import time, logging
 from dbus import MiracleDbus
-from utils import (get_logger, error_exit, select_from_list, print_ascii_art, print_instructions)
+from utils import (get_logger, error_exit, select_from_list, print_ascii_art, print_adb_instructions, print_dex_instructions)
 import getpass
 from connection_handler import ConnectionHandler
 
@@ -49,6 +49,8 @@ miracle_sinkctl = commands.start_miracle_sinkctl(interface_index)
 if miracle_sinkctl is None:
     error_exit("Failed to start miracle-sinkctl.", enable_network=True, commands=commands)
 
+print_adb_instructions()
+
 adb_devices = commands.list_adb_devices()
 if not adb_devices:
     error_exit("No ADB devices found. Exiting...", enable_network=True, commands=commands)
@@ -59,10 +61,13 @@ if not selected_device:
 
 logger.debug(f"Selected ADB device: {selected_device}")
 
+print_dex_instructions()
+
 handler = ConnectionHandler(commands, selected_device)
 dbus.subscribe_properties_changed(handler.handle_connection)
 
 try:
+    print("Listening for new connections... Press CTRL+C to exit.")
     dbus.run_loop()
 except KeyboardInterrupt:
     logger.debug("Interrupted by user. Exiting...")

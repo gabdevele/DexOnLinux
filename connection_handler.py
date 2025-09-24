@@ -33,9 +33,9 @@ class ConnectionHandler:
         if connected is None: 
             return
         if connected:
-            logger.debug(f"New device {self.device_name} connected.")
-            time.sleep(2)
+            logger.info(f"New device {self.device_name} connected.")
+            time.sleep(2) #TODO: make sure this is an appropriate timing
             self._start_scrcpy()
         else:
-            logger.debug(f"Device {self.device_name} disconnected.")
+            logger.info(f"Device {self.device_name} disconnected.")
             self._stop_scrcpy()

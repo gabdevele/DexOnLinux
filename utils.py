@@ -17,7 +17,7 @@ class CustomFormatter(logging.Formatter):
 
     FORMATS = {
         logging.DEBUG: colored(format, grey),
-        logging.INFO: colored(format, grey),
+        logging.INFO: format,
         logging.WARNING: colored(format, yellow),
         logging.ERROR: colored(format, red),
         logging.CRITICAL: colored(format, bold_red)
@@ -82,15 +82,24 @@ def error_exit(message: str, enable_network: bool = False, commands = None) -> N
         commands.enable_network_services()
     exit(1)
 
-def print_instructions() -> None:
-    print(f"\n1. Open {colored('Dex', Fore.CYAN, Style.BRIGHT)} on your device and connect to "
-      f"{colored('Miracle', Fore.CYAN, Style.BRIGHT)}.")
+def print_adb_instructions() -> None:
+    print(colored("ADB Connection Instructions:", Fore.LIGHTWHITE_EX, Style.BRIGHT))
+    print()
+    print(f"1. Connect your device to your PC via USB and enable USB Debugging in the developer options.")
+    print(f"2. Allow debugging from this PC on your device if prompted (you will see the RSA key fingerprint).")
+    print(f"3. After connecting your device, select it from the list shown below.")
+    print()
+    input(colored("Press Enter when you are ready to continue...\n", Fore.LIGHTYELLOW_EX))
 
-    print(f"2. Connect your device to your PC via {colored('USB', Fore.GREEN, Style.BRIGHT)} "
-        f"and enable {colored('USB Debugging', Fore.YELLOW, Style.BRIGHT)} in the developer options.")
-
-    print(f"3. After connecting, press {colored('Enter', Fore.RED, Style.BRIGHT)} "
-        f"and check if it is listed.\n")
+def print_dex_instructions() -> None:
+    print(colored("DeX Connection Instructions:", Fore.LIGHTWHITE_EX, Style.BRIGHT))
+    print()
+    print(f"1. Open DeX on your device.")
+    print(f"2. Select 'Miracle' from the list of available displays.")
+    print(f"3. The program will automatically detect when your device connects via DeX.")
+    print()
+    print(colored("If you get disconnected, simply reconnect your device via DeX.", Fore.LIGHTYELLOW_EX))
+    print(colored("If you encounter any other issues, check the terminal for errors and report them on GitHub.", Fore.LIGHTRED_EX))
 
 def get_app_path() -> str:
     return os.path.dirname(os.path.realpath(__file__))
