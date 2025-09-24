@@ -29,10 +29,10 @@ class Commands:
             logger.error("Incorrect sudo password.")
             return False
         
-    def _get_command(self, cmd_name: str, need_sudo: bool = True, auto_psw: bool = True) -> Optional[sh.Command]:
+    def _get_command(self, cmd_name: str, need_sudo: bool = True, auto_psw: bool = True, **kwargs) -> Optional[sh.Command]:
         try:
-            cmd = sh.Command(cmd_name)
-            if not need_sudo: 
+            cmd = sh.Command(cmd_name, **kwargs)
+            if not need_sudo:
                 return cmd
             sudo_cmd = sh.Command("sudo").bake("-S",_in=self.sudo_password) if auto_psw else sh.Command("sudo").bake("-S")
             return sudo_cmd.bake(cmd)
@@ -126,8 +126,11 @@ class Commands:
     def kill_miracle(self) -> None:
         #could just use pkill("miracle", _bg=True) but what if
         #there are other processes with miracle in their name?
-        self.pkill("miracle-wifid", _bg=True)
-        self.pkill("miracle-sinkctl", _bg=True)
+        try:
+            self.pkill("miracle-wifid")
+            self.pkill("miracle-sinkctl")
+        except:
+            pass
         logger.debug("Killed miracle-wifid and miracle-sinkctl processes.")
 
     def run_scrcpy(self, selected_device: str) -> Optional[sh.RunningCommand]:

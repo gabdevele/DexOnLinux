@@ -1,9 +1,9 @@
 from commands import Commands
 import time, logging
 from dbus import MiracleDbus
-from utils import get_logger, error_exit, select_from_list, print_ascii_art, colored
+from utils import (get_logger, error_exit, select_from_list, print_ascii_art, print_adb_instructions, print_dex_instructions)
 import getpass
-from colorama import Fore, Style
+from connection_handler import ConnectionHandler
 
 logging.basicConfig(level=logging.WARNING, format='[%(levelname)s] (%(name)s) - %(message)s (%(filename)s:%(lineno)d)')
 
@@ -39,9 +39,6 @@ dbus = MiracleDbus()
 if not dbus.bus_exists():
     error_exit("Miracle Dbus does not exist.", enable_network=True, commands=commands)
 
-dbus.on_peer_event(dbus.print_logs_dbus)
-dbus.subscribe_properties_changed(dbus.print_logs_dbus)
-
 links = dbus.get_links()
 interface_index = dbus.get_interface_index(links[0]) #TODO: arbitrarily choosing the first one, this should be reviewed
 
@@ -52,16 +49,7 @@ miracle_sinkctl = commands.start_miracle_sinkctl(interface_index)
 if miracle_sinkctl is None:
     error_exit("Failed to start miracle-sinkctl.", enable_network=True, commands=commands)
 
-print(f"\n1. Open {colored('Dex', Fore.CYAN, Style.BRIGHT)} on your device and connect to "
-      f"{colored('Miracle', Fore.CYAN, Style.BRIGHT)}.")
-
-print(f"2. Connect your device to your PC via {colored('USB', Fore.GREEN, Style.BRIGHT)} "
-      f"and enable {colored('USB Debugging', Fore.YELLOW, Style.BRIGHT)} in the developer options.")
-
-print(f"3. After connecting, press {colored('Enter', Fore.RED, Style.BRIGHT)} "
-      f"and check if it is listed.\n")
-
-input(f"When ready, press {colored('Enter', Fore.RED, Style.BRIGHT)} to continue...\n")
+print_adb_instructions()
 
 adb_devices = commands.list_adb_devices()
 if not adb_devices:
@@ -73,10 +61,14 @@ if not selected_device:
 
 logger.debug(f"Selected ADB device: {selected_device}")
 
+print_dex_instructions()
+
+handler = ConnectionHandler(commands, selected_device)
+dbus.subscribe_properties_changed(handler.handle_connection)
+
 try:
-    print("Press Ctrl+C to stop and exit.")
-    scrcpy = commands.run_scrcpy(selected_device)
-    scrcpy.wait()
+    print("Listening for new connections... Press CTRL+C to exit.")
+    dbus.run_loop()
 except KeyboardInterrupt:
     logger.debug("Interrupted by user. Exiting...")
 finally:
