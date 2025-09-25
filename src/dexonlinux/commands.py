@@ -136,7 +136,7 @@ class Commands:
     def run_scrcpy(self, selected_device: str) -> Optional[sh.RunningCommand]:
         #handles multiple devices: https://github.com/Genymobile/scrcpy/issues/400
         try:
-            os.environ["SCRCPY_ICON_PATH"] = get_app_path() + "/icon.png" #TODO: currently not working on my ubuntu, could be cache issue?
+            os.environ["SCRCPY_ICON_PATH"] = os.path.join(get_app_path(), "assets/icon.png") #TODO: currently not working on my ubuntu, could be cache issue?
             return self.scrcpy("-s", selected_device, "--display-id", "2", "--window-title", "DexOnLinux",
                             "--fullscreen", "--mouse-bind=++++", _bg=True, _err_to_out=True, _out=logger.debug)
         except Exception as e:

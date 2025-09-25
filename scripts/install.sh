@@ -2,11 +2,15 @@
 set -e
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
 log() { echo -e "${!1}[${2}]${NC} $3"; }
 info()    { log BLUE "INFO" "$1"; }
 success() { log GREEN "OK"   "$1"; }
 warn()    { log YELLOW "WARN" "$1"; }
 error()   { log RED "FAIL" "$1"; exit 1; }
+
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 version_ge() { [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]; }
@@ -27,11 +31,9 @@ check_python() {
 install_system_deps() {
     info "Updating packages and installing dependencies..."
     sudo apt-get update -qq
-    sudo apt-get install -y python3-venv python3-dev python3-pip \
-        pkg-config libcairo2-dev libgirepository1.0-dev libglib2.0-dev \
-        libudev-dev libsystemd-dev libreadline-dev check libtool autoconf \
-        cmake build-essential git wget curl unzip adb ffmpeg
-    sudo apt install libgirepository-2.0-dev gcc libcairo2-dev pkg-config python3-dev gir1.2-gtk-4.0 #PyGObject's dependencies
+    sudo apt-get install -y python3-venv ffmpeg git wget
+    sudo apt-get install -y cmake libglib2.0-dev libudev-dev libsystemd-dev libreadline-dev check libtool autoconf #Miraclecast's dependencies
+    sudo apt-get install -y libgirepository-2.0-dev gcc libcairo2-dev pkg-config python3-dev gir1.2-gtk-4.0 #PyGObject's dependencies
     success "System dependencies installed"
 }
 
@@ -86,11 +88,11 @@ print_usage() {
     echo "   python3 main.py"
     echo "   deactivate"
     echo ""
-    info "Make sure USB Debugging is enabled on your Android device."
 }
 
 main() {
     info "Starting DexOnLinux installation..."
+    cd "$PROJECT_ROOT" || error "Cannot access project directory $PROJECT_ROOT"
     check_os
     check_python
     install_system_deps
