@@ -9,6 +9,7 @@ class ConnectionHandler:
         self.commands = commands
         self.device = device
         self.scrcpy_process: sh.RunningCommand = None
+        self.ffmpeg_process: sh.RunningCommand = None
         self.device_name: str = "unknown"
 
     def _start_scrcpy(self):
@@ -16,11 +17,17 @@ class ConnectionHandler:
         self.scrcpy_process = self.commands.run_scrcpy(self.device)
         if self.scrcpy_process is None:
             error_exit("Scrcpy error", enable_network=True, commands=self.commands)
+        logger.debug("Starting ffmpeg to keep the stream alive...")
+        self.ffmpeg_process = self.commands.run_ffmpeg()
+        if self.ffmpeg_process is None:
+            error_exit("FFmpeg error", enable_network=True, commands=self.commands)
 
     def _stop_scrcpy(self):
         logger.debug("Stopping scrcpy...")
         self.scrcpy_process.process.terminate()
         self.scrcpy_process = None
+        self.ffmpeg_process.process.terminate()
+        self.ffmpeg_process = None
 
     def _set_device_name(self, changed: dict):
         friendly_name = changed.get("FriendlyName")

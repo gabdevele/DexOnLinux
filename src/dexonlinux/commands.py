@@ -17,8 +17,9 @@ class Commands:
         self.scrcpy = self._get_command("scrcpy", need_sudo=False) #does not work with sudo
         self.adb = self._get_command("adb")
         self.pkill = self._get_command("pkill")
+        self.ffmpeg = self._get_command("ffmpeg", need_sudo=False)
 
-        if not all([self.systemctl, self.miracle_sinkctl, self.miracle_wifi, self.scrcpy, self.adb, self.pkill]):
+        if not all([self.systemctl, self.miracle_sinkctl, self.miracle_wifi, self.scrcpy, self.adb, self.pkill, self.ffmpeg]):
             exit(1)
 
     def _check_sudo_password(self) -> bool:
@@ -142,5 +143,12 @@ class Commands:
         except Exception as e:
             logger.error(f"Error starting scrcpy: {e}")
             return None
-
-#TODO: this should fix disconnection after 2/3 minutes ffmpeg -i rtp://127.0.0.1:1991 -f null -
+        
+    def run_ffmpeg(self) -> Optional[sh.RunningCommand]:
+        #TODO: just to keep the rtp stream alive, I'm working on a better solution
+        try:
+            return self.ffmpeg("-i", "rtp://127.0.0.1:1991", "-f", "null", "-", _bg=True, _err_to_out=True)
+        except Exception as e:
+            logger.error(f"Error starting ffmpeg: {e}")
+            return None
+        
