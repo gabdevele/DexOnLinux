@@ -146,6 +146,7 @@ class Commands:
         
     def run_ffmpeg(self) -> Optional[sh.RunningCommand]:
         #TODO: just to keep the rtp stream alive, I'm working on a better solution
+        #TODO: error sh.ErrorReturnCode_255 when exiting the script
         try:
             return self.ffmpeg("-i", "rtp://127.0.0.1:1991", "-f", "null", "-", _bg=True, _err_to_out=True)
         except Exception as e:

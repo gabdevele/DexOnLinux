@@ -75,8 +75,8 @@ install_scrcpy() {
     wget -qO scrcpy.tar.gz "$URL" || error "Failed to download scrcpy"
     tar -xzf scrcpy.tar.gz
     DIR=$(find . -type d -name "scrcpy-linux-*")
-    sudo cp -r "$DIR/scrcpy" /usr/local/bin/
-    sudo cp -r "$DIR/scrcpy-server" /usr/local/bin/
+    sudo cp -r "$DIR/scrcpy" /usr/bin/
+    sudo cp -r "$DIR/scrcpy-server" /usr/bin/
     cd /; rm -rf "$TMP"
     success "Scrcpy $REQ installed"
 }
