@@ -47,12 +47,21 @@ def print_ascii_art() -> None:
      | |_| |  __/>  <| |_| | | | | |___| | | | | |_| |>  < 
      |____/ \___/_/\_\\___/|_| |_|_____|_|_| |_|\__,_/_/\_\
     """
-    print(colored(art.center(90), Fore.LIGHTYELLOW_EX))
+    border = "═" * 70
+    print(colored(f"\n╔{border}╗", Fore.LIGHTYELLOW_EX))
+    for line in art.splitlines():
+        if line.strip():
+            print(colored("║", Fore.LIGHTYELLOW_EX) + colored(line.center(70), Fore.LIGHTYELLOW_EX) + colored("║", Fore.LIGHTYELLOW_EX))
+    print(colored(f"╚{border}╝\n", Fore.LIGHTYELLOW_EX))
+
     message = (
+        "⚡ Welcome to DexOnLinux! ⚡\n\n"
         "You will be asked for your sudo password to run some commands\n"
-        "such as 'systemctl', 'miracle-wifid', etc...\n"
+        "that require elevated privileges.\n"
+        "Your network connection will be temporarily disabled while this tool is running.\n"
+        "For help or issues, visit: https://github.com/gabdevele/DexOnLinux\n"
     )
-    print(colored(message, Fore.LIGHTWHITE_EX))
+    print(colored(message, Fore.LIGHTWHITE_EX, Style.BRIGHT))
 
 def select_from_list(items: List[str], prompt: str = "Select an item:", input_prompt: str = "> ") -> Optional[str]:
     print()

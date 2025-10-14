@@ -52,6 +52,7 @@ install_miraclecast() {
     info "Installing Miraclecast..."
     git clone https://github.com/albfan/miraclecast.git 2>/dev/null
     cd miraclecast
+    sudo cp res/org.freedesktop.miracle.conf /etc/dbus-1/system.d/
     rm -rf build && mkdir build && cd build
     cmake -DCMAKE_INSTALL_PREFIX=/usr ..
     make -j$(nproc)
@@ -83,10 +84,8 @@ install_scrcpy() {
 
 print_usage() {
     echo ""
-    info "To use DexOnLinux:"
-    echo "   source venv/bin/activate"
-    echo "   python3 main.py"
-    echo "   deactivate"
+    info "To use DexOnLinux run:"
+    echo -e "${YELLOW}./scripts/run.sh${NC}"
     echo ""
 }
 
