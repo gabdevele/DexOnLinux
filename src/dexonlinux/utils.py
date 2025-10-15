@@ -55,7 +55,6 @@ def print_ascii_art() -> None:
     print(colored(f"╚{border}╝\n", Fore.LIGHTYELLOW_EX))
 
     message = (
-        "⚡ Welcome to DexOnLinux! ⚡\n\n"
         "You will be asked for your sudo password to run some commands\n"
         "that require elevated privileges.\n"
         "Your network connection will be temporarily disabled while this tool is running.\n"
