@@ -9,6 +9,8 @@ Got Samsung DeX on your device? What if you could stream directly on your Linux 
 
 DexOnLinux is a tool that allows you to stream Samsung DeX from your Samsung device to your Linux PC, controlling it with your mouse and keyboard, and interacting with it as if it were a native application on your desktop. 
 
+<img width="978" height="746" alt="image" src="https://github.com/user-attachments/assets/41a5a25b-ad00-4d06-a7af-d62083f295b3" />
+
 
 
 ## How does it work?
