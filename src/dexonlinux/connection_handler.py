@@ -1,5 +1,9 @@
+import socket
+import threading
+import signal
 from commands import Commands
-import sh, time
+import sh
+import time
 from utils import get_logger, error_exit
 
 logger = get_logger()
@@ -9,25 +13,58 @@ class ConnectionHandler:
         self.commands = commands
         self.device = device
         self.scrcpy_process: sh.RunningCommand = None
-        self.ffmpeg_process: sh.RunningCommand = None
         self.device_name: str = "unknown"
+        self._stop_drain = threading.Event()
+        self._drain_thread = None
 
     def _start_scrcpy(self):
+        self._stop_drain.clear()
+        self._drain_thread = threading.Thread(target=self._drain_stream, daemon=True)
+        self._drain_thread.start()
+
         logger.debug("Starting scrcpy...")
         self.scrcpy_process = self.commands.run_scrcpy(self.device)
+        
         if self.scrcpy_process is None:
+            self._stop_drain.set()
             error_exit("Scrcpy error", enable_network=True, commands=self.commands)
-        logger.debug("Starting ffmpeg to keep the stream alive...")
-        self.ffmpeg_process = self.commands.run_ffmpeg()
-        if self.ffmpeg_process is None:
-            error_exit("FFmpeg error", enable_network=True, commands=self.commands)
 
     def _stop_scrcpy(self):
-        logger.debug("Stopping scrcpy...")
-        self.scrcpy_process.process.terminate()
-        self.scrcpy_process = None
-        self.ffmpeg_process.process.terminate()
-        self.ffmpeg_process = None
+        logger.debug("Stopping scrcpy and drainer...")
+        
+        self._stop_drain.set()
+        if self._drain_thread and self._drain_thread.is_alive():
+            self._drain_thread.join(timeout=1.0)
+
+        if self.scrcpy_process:
+            try:
+                if self.scrcpy_process.process:
+                    self.scrcpy_process.process.kill()
+                    self.scrcpy_process.process.wait(timeout=0.5)
+            except Exception as e:
+                logger.debug(f"Scrcpy process already dead or error killing: {e}")
+            finally:
+                self.scrcpy_process = None
+
+    def _drain_stream(self):
+        # consume rtp stream to prevent miraclecast from closing the connection
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind(('0.0.0.0', 1991))
+                s.settimeout(1.0)
+                logger.debug("RTP Drainer started on UDP port 1991")
+                
+                while not self._stop_drain.is_set():
+                    try:
+                        s.recv(4096)
+                    except socket.timeout:
+                        continue
+                    except OSError:
+                        break
+            except Exception as e:
+                logger.error(f"Drainer bind failed: {e}")
+        logger.debug("Drainer thread stopped")
 
     def _set_device_name(self, changed: dict):
         friendly_name = changed.get("FriendlyName")

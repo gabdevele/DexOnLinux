@@ -1,4 +1,5 @@
 import logging, os
+from pathlib import Path
 from typing import List, Optional
 from colorama import Fore, Style
 
@@ -110,4 +111,4 @@ def print_dex_instructions() -> None:
     print(colored("If you encounter any other issues, check the terminal for errors and report them on GitHub.", Fore.LIGHTRED_EX))
 
 def get_app_path() -> str:
-    return os.path.dirname(os.path.realpath(__file__))
+    return str(Path(__file__).resolve().parents[2])

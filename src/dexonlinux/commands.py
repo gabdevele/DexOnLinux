@@ -1,4 +1,4 @@
-import sh, os
+import sh, os, re
 from pathlib import Path
 from typing import Optional, List
 from queue import Queue
@@ -17,9 +17,8 @@ class Commands:
         self.scrcpy = self._get_command("scrcpy", need_sudo=False) #does not work with sudo
         self.adb = self._get_command("adb")
         self.pkill = self._get_command("pkill")
-        self.ffmpeg = self._get_command("ffmpeg", need_sudo=False)
 
-        if not all([self.systemctl, self.miracle_sinkctl, self.miracle_wifi, self.scrcpy, self.adb, self.pkill, self.ffmpeg]):
+        if not all([self.systemctl, self.miracle_sinkctl, self.miracle_wifi, self.scrcpy, self.adb, self.pkill]):
             exit(1)
 
     def _check_sudo_password(self) -> bool:
@@ -78,6 +77,7 @@ class Commands:
         commands = Queue()
         commands.put(f"set-managed {interface_index} yes")
         commands.put(f"run {interface_index}")
+        #TODO: dynamic port
         try:
             process = self.miracle_sinkctl("--external-player", "true", "--port", "1991", "--audio", "1", 
                                           _bg=background,
@@ -125,8 +125,6 @@ class Commands:
             return []
 
     def kill_miracle(self) -> None:
-        #could just use pkill("miracle", _bg=True) but what if
-        #there are other processes with miracle in their name?
         try:
             self.pkill("miracle-wifid")
             self.pkill("miracle-sinkctl")
@@ -137,19 +135,42 @@ class Commands:
     def run_scrcpy(self, selected_device: str) -> Optional[sh.RunningCommand]:
         #handles multiple devices: https://github.com/Genymobile/scrcpy/issues/400
         try:
-            os.environ["SCRCPY_ICON_PATH"] = os.path.join(get_app_path(), "assets/icon.png") #TODO: currently not working on my ubuntu, could be cache issue?
-            return self.scrcpy("-s", selected_device, "--display-id", "2", "--window-title", "DexOnLinux",
-                            "--fullscreen", "--mouse-bind=++++", _bg=True, _err_to_out=True, _out=logger.debug)
+            icon_path = os.path.join(get_app_path(), "assets", "icon.png")
+            scrcpy_env = os.environ.copy()
+            if os.path.isfile(icon_path):
+                scrcpy_env["SCRCPY_ICON_PATH"] = icon_path
+                logger.debug(f"Using SCRCPY_ICON_PATH: {icon_path}")
+            else:
+                logger.warning(f"Scrcpy icon not found at: {icon_path}")
+
+            display_id = self._get_display_id(selected_device)
+
+            #TODO: make user choose if fullscreen or not
+            args = ["-s", selected_device, "--window-title", "DexOnLinux", "--mouse-bind=++++"]
+            
+            if display_id:
+                args.extend(["--display-id", display_id])
+            else:
+                logger.error("No display ID found for scrcpy. Defaulting to primary display.")
+
+            return self.scrcpy(*args, _bg=True, _err_to_out=True, _out=logger.debug, _env=scrcpy_env)
         except Exception as e:
             logger.error(f"Error starting scrcpy: {e}")
             return None
-        
-    def run_ffmpeg(self) -> Optional[sh.RunningCommand]:
-        #TODO: just to keep the rtp stream alive, I'm working on a better solution
-        #TODO: error sh.ErrorReturnCode_255 when exiting the script
+
+    def _get_display_id(self, selected_device: str) -> Optional[str]:
+        #TODO: fix if is only --display-id=0 or some errors
         try:
-            return self.ffmpeg("-i", "rtp://127.0.0.1:1991", "-f", "null", "-", _bg=True, _err_to_out=True)
+            output = self.scrcpy("-s", selected_device, "--list-displays", _err_to_out=True)
+            pattern = re.compile(r"--display-id=(\d+)")
+            matches = pattern.findall(output)
+            display_ids = [int(did) for did in matches]
+            if not display_ids:
+                return None
+
+            selected_display = max(display_ids)
+            logger.debug(f"Selected display with largest id: {selected_display}")
+            return str(selected_display)
         except Exception as e:
-            logger.error(f"Error starting ffmpeg: {e}")
+            logger.error(f"Unable to list scrcpy displays: {e}")
             return None
-        
