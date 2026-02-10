@@ -1,4 +1,4 @@
-import sh, os, re
+import sh, os, re, socket
 from pathlib import Path
 from typing import Optional, List
 from queue import Queue
@@ -67,7 +67,7 @@ class Commands:
             logger.error(f"Error starting miracle-wifid: {e}")
             return None
 
-    def start_miracle_sinkctl(self, interface_index: int, background: bool = True) -> Optional[sh.RunningCommand]:
+    def start_miracle_sinkctl(self, interface_index: int, background: bool = True, port: int = 1991) -> Optional[sh.RunningCommand]:
         def interact(commands: Queue, stdin: Queue):
             while not commands.empty():
                 command = commands.get()
@@ -77,9 +77,8 @@ class Commands:
         commands = Queue()
         commands.put(f"set-managed {interface_index} yes")
         commands.put(f"run {interface_index}")
-        #TODO: dynamic port
         try:
-            process = self.miracle_sinkctl("--external-player", "true", "--port", "1991", "--audio", "1", 
+            process = self.miracle_sinkctl("--external-player", "true", "--port", str(port), "--audio", "1", 
                                           _bg=background,
                                           _out=lambda _, stdin: interact(commands, stdin),
                                           _tty_in=True, _err_to_out=True)
@@ -90,6 +89,16 @@ class Commands:
             logger.error(f"Error starting miracle-sinkctl: {e}")
             return None
 
+    def _get_port(self) -> int:
+        #os automatically assigns an available port when binding to port 0, so we can use that to find a free port
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('', 0))
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                port = s.getsockname()[1]
+                return port
+        except Exception as e:
+            raise RuntimeError(f"Could not find an available port: {e}")
 
     def get_p2p_interfaces(self) -> List[str]:
         #revisited method taken from: 
@@ -151,6 +160,7 @@ class Commands:
             if display_id:
                 args.extend(["--display-id", display_id])
             else:
+                #TODO: handle if display id is 0 and errors
                 logger.error("No display ID found for scrcpy. Defaulting to primary display.")
 
             return self.scrcpy(*args, _bg=True, _err_to_out=True, _out=logger.debug, _env=scrcpy_env)

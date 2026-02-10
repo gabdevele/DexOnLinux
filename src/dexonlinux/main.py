@@ -44,7 +44,9 @@ interface_index = dbus.get_interface_index(links[0]) #TODO: arbitrarily choosing
 
 time.sleep(1) #necessary otherwise I get this issue: https://github.com/albfan/miraclecast/issues/211
 
-miracle_sinkctl = commands.start_miracle_sinkctl(interface_index)
+port = commands._get_port()
+
+miracle_sinkctl = commands.start_miracle_sinkctl(interface_index, port=port)
 
 if miracle_sinkctl is None:
     error_exit("Failed to start miracle-sinkctl.", enable_network=True, commands=commands)
@@ -63,7 +65,7 @@ logger.debug(f"Selected ADB device: {selected_device}")
 
 print_dex_instructions()
 
-handler = ConnectionHandler(commands, selected_device)
+handler = ConnectionHandler(commands, selected_device, port)
 dbus.subscribe_properties_changed(handler.handle_connection)
 
 try:

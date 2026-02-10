@@ -9,9 +9,10 @@ from utils import get_logger, error_exit
 logger = get_logger()
 
 class ConnectionHandler:
-    def __init__(self, commands: Commands, device: str):
+    def __init__(self, commands: Commands, device: str, port: int = 1991):
         self.commands = commands
         self.device = device
+        self.port = port
         self.scrcpy_process: sh.RunningCommand = None
         self.device_name: str = "unknown"
         self._stop_drain = threading.Event()
@@ -51,9 +52,9 @@ class ConnectionHandler:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
-                s.bind(('0.0.0.0', 1991))
+                s.bind(('0.0.0.0', self.port))
                 s.settimeout(1.0)
-                logger.debug("RTP Drainer started on UDP port 1991")
+                logger.debug(f"RTP Drainer started on UDP port {self.port}")
                 
                 while not self._stop_drain.is_set():
                     try:
