@@ -15,4 +15,11 @@ dependencies = [
     "pydbus==0.6.0",
     "pygobject==3.54.2",
     "sh==2.2.2",
+    "textual>=7.5.0",
+]
+
+[dependency-groups]
+dev = [
+    "textual-dev>=1.8.0",
+    "textual[syntax]>=7.5.0",
 ]
