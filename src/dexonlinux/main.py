@@ -30,7 +30,7 @@ if not commands.disable_network_services():
 time.sleep(1.5)
 
 miracle_wifi = commands.start_miracle_wifi(selected_interface)
-if miracle_wifi is None: #using "is None" with sh process 'cause otherwise it internally runs process.wait()
+if miracle_wifi is None:
     error_exit("Failed to start miracle-wifid.", enable_network=True, commands=commands)
 
 time.sleep(0.5)

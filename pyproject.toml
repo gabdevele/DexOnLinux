@@ -14,7 +14,6 @@ dependencies = [
     "pycairo==1.28.0",
     "pydbus==0.6.0",
     "pygobject==3.54.2",
-    "sh==2.2.2",
     "textual>=7.5.0",
 ]
 

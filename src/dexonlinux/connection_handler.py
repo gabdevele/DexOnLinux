@@ -1,9 +1,10 @@
 import socket
 import threading
 import signal
+import subprocess
 from commands import Commands
-import sh
 import time
+from typing import Optional
 from utils import get_logger, error_exit
 
 logger = get_logger()
@@ -13,7 +14,7 @@ class ConnectionHandler:
         self.commands = commands
         self.device = device
         self.port = port
-        self.scrcpy_process: sh.RunningCommand = None
+        self.scrcpy_process: Optional[subprocess.Popen] = None
         self.device_name: str = "unknown"
         self._stop_drain = threading.Event()
         self._drain_thread = None
@@ -39,9 +40,8 @@ class ConnectionHandler:
 
         if self.scrcpy_process:
             try:
-                if self.scrcpy_process.process:
-                    self.scrcpy_process.process.kill()
-                    self.scrcpy_process.process.wait(timeout=0.5)
+                self.scrcpy_process.kill()
+                self.scrcpy_process.wait(timeout=0.5)
             except Exception as e:
                 logger.debug(f"Scrcpy process already dead or error killing: {e}")
             finally:

@@ -1,0 +1,8 @@
+- fix: 
+no longer running on peer ce:f9:f0:2b:8a:cc@3
+ERROR: cannot change p2p-scanning state on link 3 to 1: Transport endpoint is not connected (ctl_link_set_p2p_scanning() in ctl-wifi.c:739)
+no longer running on link 3 (commands.py:317)
+- fix: remove dbus dependency and check if connected from sinkctl output
+- fix: drain and stream function
+- fix: if dex is connected before selecting adb device connection doesn't get catched
+- fix: if strcpy is closed (by gui) its process and dexonlinux doesn't gets killed 
