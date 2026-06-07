@@ -28,11 +28,6 @@ check_python() {
     success "Python $PY_VER detected"
 }
 
-check_uv() {
-    command_exists uv || error "uv not installed. Install it from https://docs.astral.sh/uv/ and run this script again."
-    success "uv detected: $(uv --version)"
-}
-
 install_system_deps() {
     info "Updating packages and installing dependencies..."
     sudo apt-get update -qq
@@ -42,9 +37,21 @@ install_system_deps() {
 }
 
 setup_venv() {
-    info "Synchronizing Python environment with uv..."
-    uv sync --no-dev --locked --python "$(command -v python3)"
-    success "Virtual environment synchronized"
+    if command_exists uv; then
+        success "uv detected: $(uv --version)"
+        info "Creating virtualenv with uv..."
+        uv venv --python "$(command -v python3)" .venv
+        info "Installing DexOnLinux from PyPI with uv..."
+        uv pip install --python .venv/bin/python --upgrade dexonlinux
+    else
+        warn "uv not found; falling back to pip."
+        info "Creating virtualenv with python3..."
+        python3 -m venv .venv
+        info "Installing DexOnLinux from PyPI with pip..."
+        .venv/bin/python -m pip install --upgrade pip
+        .venv/bin/python -m pip install --upgrade dexonlinux
+    fi
+    success "Python package installed"
 }
 
 install_miraclecast() {
@@ -86,19 +93,17 @@ install_scrcpy() {
 
 print_usage() {
     echo ""
-    info "To use DexOnLinux run:"
-    echo -e "${YELLOW}./scripts/run.sh${NC}"
-    echo "or activate the environment and run:"
+    info "DexOnLinux is installed. Run:"
     echo -e "${YELLOW}source .venv/bin/activate && dexonlinux${NC}"
     echo ""
 }
 
 main() {
     info "Starting DexOnLinux installation..."
+    [[ "$EUID" -eq 0 ]] && error "Do not run this script as root. Run ./scripts/install.sh; it will ask sudo only when needed."
     cd "$PROJECT_ROOT" || error "Cannot access project directory $PROJECT_ROOT"
     check_os
     check_python
-    check_uv
     install_system_deps
     setup_venv
     install_miraclecast
