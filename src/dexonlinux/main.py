@@ -2,11 +2,11 @@ import argparse
 import getpass
 import signal
 import sys
+import threading
 import time
 
 from dexonlinux.commands import CommandError, Commands
 from dexonlinux.connection_handler import ConnectionHandler
-from dexonlinux.dbus import MiracleDbus
 from dexonlinux.utils import (
     colored,
     configure_logger,
@@ -67,16 +67,6 @@ def build_parser():
     parser.add_argument("--yes", action="store_true", help="Do not ask before temporarily disabling network services.")
     parser.add_argument("--log-file", help="Write debug logs to a file.")
     return parser
-
-
-def wait_until(label, predicate, timeout=8.0, interval=0.25):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if predicate():
-            return True
-        time.sleep(interval)
-    logger.debug("Timed out waiting for %s.", label)
-    return False
 
 
 def choose_interface(commands, requested):
@@ -164,54 +154,49 @@ def run(args):
         runtime.disable_network()
         runtime.miracle_wifi = commands.start_miracle_wifi(selected_interface)
 
-        dbus = MiracleDbus()
-        if not wait_until("Miraclecast DBus service", dbus.bus_exists, timeout=8.0):
-            raise CommandError("Miraclecast DBus service did not become available.")
-
-        link_path = None
-        if wait_until("Miraclecast link", lambda: bool(dbus.get_links()), timeout=8.0):
-            link_path = dbus.get_link_for_interface(selected_interface)
-        if link_path is None:
-            raise CommandError(f"Could not find a Miraclecast link for interface '{selected_interface}'.")
-
-        interface_index = dbus.get_interface_index(link_path)
-        if interface_index is None:
-            raise CommandError(f"Could not read Miraclecast interface index for {link_path}.")
-
+        interface_index = commands.get_interface_index(selected_interface)
         port = args.port or commands.get_available_udp_port()
-        runtime.miracle_sinkctl = commands.start_miracle_sinkctl(interface_index, port)
+        stop_requested = threading.Event()
 
-        print_dex_instructions()
         handler = ConnectionHandler(
             commands,
             selected_device.serial,
             port,
             display_id=args.display_id,
             fullscreen=args.fullscreen,
-            on_scrcpy_closed=dbus.stop_loop,
+            on_scrcpy_closed=stop_requested.set,
         )
         runtime.connection_handler = handler
-        dbus.subscribe_properties_changed(handler.handle_connection)
+        runtime.miracle_sinkctl = commands.start_miracle_sinkctl(
+            interface_index,
+            port,
+            event_callback=handler.handle_sinkctl_event,
+        )
 
-        for peer in dbus.get_connected_peers():
-            handler.handle_connection(peer.path, peer.interface, peer.properties, {})
+        print_dex_instructions()
 
-        stop_requested = False
+        interrupted = False
 
         def request_stop(signum, frame):
-            nonlocal stop_requested
-            stop_requested = True
-            dbus.stop_loop()
+            nonlocal interrupted
+            interrupted = True
+            stop_requested.set()
 
         previous_sigint = signal.signal(signal.SIGINT, request_stop)
         previous_sigterm = signal.signal(signal.SIGTERM, request_stop)
         try:
-            dbus.run_loop()
+            logger.info("Waiting for DeX connection. Press CTRL+C to exit.")
+            while not stop_requested.is_set():
+                if runtime.miracle_wifi.poll() is not None:
+                    raise CommandError("miracle-wifid stopped unexpectedly.")
+                if runtime.miracle_sinkctl.poll() is not None:
+                    raise CommandError("miracle-sinkctl stopped unexpectedly.")
+                time.sleep(0.25)
         finally:
             signal.signal(signal.SIGINT, previous_sigint)
             signal.signal(signal.SIGTERM, previous_sigterm)
 
-        return 130 if stop_requested else 0
+        return 130 if interrupted else 0
 
 
 def main(argv=None):
