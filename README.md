@@ -23,7 +23,7 @@ DexOnLinux uses several different components to achieve this such as:
 
 ## How to install and run
 
-> **This project requires python 3.8 or higher, pip, and git to be installed on your system and root privileges to install some dependencies.**
+> **This project requires Python 3.9 or higher, pip, and git to be installed on your system and root privileges to install some dependencies.**
 
 The installation process is pretty easy, just follow the steps below. At the moment everything has been tested only on Ubuntu 24.04, but it should work on other distributions as well.
 
@@ -73,10 +73,16 @@ Since the manual installation relies on external dependencies, I'll link the off
 - [scrcpy](https://github.com/Genymobile/scrcpy/blob/master/README.md#installation)
 - [PyGObject](https://pygobject.gnome.org/getting_started.html)
 
-After installing these dependencies you will need to install python dependencies:
+After installing these dependencies you will need to install Python dependencies with uv:
 
 ```bash
-pip install -r requirements.txt
+uv sync --no-dev --locked
+```
+
+For development tools:
+
+```bash
+uv sync --group dev --locked
 ```
 
 ---
@@ -86,5 +92,44 @@ pip install -r requirements.txt
 ```bash
 ./scripts/run.sh
 ```
-and that's it!
+or, after activating the virtual environment:
 
+```bash
+dexonlinux
+```
+
+From the repository you can also run:
+
+```bash
+uv run dexonlinux
+```
+
+When DexOnLinux is published on PyPI, the Python package installation will be:
+
+```bash
+pip install dexonlinux
+dexonlinux
+```
+
+Useful CLI options:
+
+```bash
+dexonlinux --interface wlan0 --device R5CN1234567
+dexonlinux --fullscreen
+dexonlinux --display-id 2
+dexonlinux --debug --log-file dexonlinux.log
+dexonlinux --no-banner --no-color
+```
+
+## CLI behavior
+
+DexOnLinux now performs dependency, Wi-Fi P2P, sudo, and ADB checks before disabling network services. Before the network is disabled, the CLI asks for confirmation unless you pass `--yes`.
+
+If the session exits normally, on Ctrl+C, or after a startup error, DexOnLinux attempts to stop the Miraclecast processes it started and restore NetworkManager and wpa_supplicant.
+
+## Troubleshooting
+
+- If your phone appears as `unauthorized`, accept the ADB authorization prompt on the device and refresh.
+- If your phone appears as `offline`, reconnect USB and restart ADB with `adb kill-server && adb start-server`.
+- If scrcpy opens the wrong display, reconnect DeX and pass `--display-id <id>` after checking the display list shown by the CLI.
+- If networking is not restored, run `sudo systemctl start NetworkManager wpa_supplicant`.

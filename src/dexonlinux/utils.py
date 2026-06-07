@@ -1,10 +1,14 @@
-import logging, os
+import logging
 from pathlib import Path
-from typing import List, Optional
 from colorama import Fore, Style
 
+COLOR_ENABLED = True
+USER_LOG_FORMAT = "[%(levelname)s] %(message)s"
+DEBUG_LOG_FORMAT = "[%(levelname)s] (%(name)s) - %(message)s (%(filename)s:%(lineno)d)"
 
 def colored(text: str, color: str, style: str = "") -> str:
+    if not COLOR_ENABLED:
+        return text
     return color + style + text + Style.RESET_ALL
 
 class CustomFormatter(logging.Formatter):
@@ -14,14 +18,13 @@ class CustomFormatter(logging.Formatter):
     red = Fore.LIGHTRED_EX
     bold_red = Fore.RED
     reset = Style.RESET_ALL
-    format = "[%(levelname)s] (%(name)s) - %(message)s (%(filename)s:%(lineno)d)"
 
     FORMATS = {
-        logging.DEBUG: colored(format, grey),
-        logging.INFO: format,
-        logging.WARNING: colored(format, yellow),
-        logging.ERROR: colored(format, red),
-        logging.CRITICAL: colored(format, bold_red)
+        logging.DEBUG: colored(USER_LOG_FORMAT, grey),
+        logging.INFO: USER_LOG_FORMAT,
+        logging.WARNING: colored(USER_LOG_FORMAT, yellow),
+        logging.ERROR: colored(USER_LOG_FORMAT, red),
+        logging.CRITICAL: colored(USER_LOG_FORMAT, bold_red)
     }
 
     def format(self, record):
@@ -29,18 +32,32 @@ class CustomFormatter(logging.Formatter):
         formatter = logging.Formatter(log_fmt)
         return formatter.format(record)
 
-handler = logging.StreamHandler()
-handler.setFormatter(CustomFormatter())
-
 logger = logging.getLogger("dexonlinux")
-logger.setLevel(logging.DEBUG)
-logger.addHandler(handler)
+logger.setLevel(logging.INFO)
 logger.propagate = False
+_console_handler = logging.StreamHandler()
+_console_handler.setFormatter(CustomFormatter())
+logger.addHandler(_console_handler)
 
-def get_logger() -> logging.Logger:
+def get_logger():
     return logger
 
-def print_ascii_art() -> None:
+def configure_logger(debug=False, no_color=False, log_file=None):
+    global COLOR_ENABLED
+    COLOR_ENABLED = not no_color
+    logger.setLevel(logging.DEBUG if debug else logging.INFO)
+    if debug:
+        _console_handler.setFormatter(logging.Formatter(DEBUG_LOG_FORMAT))
+    else:
+        _console_handler.setFormatter(CustomFormatter() if COLOR_ENABLED else logging.Formatter(USER_LOG_FORMAT))
+
+    if log_file:
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(logging.Formatter(DEBUG_LOG_FORMAT))
+        file_handler.setLevel(logging.DEBUG)
+        logger.addHandler(file_handler)
+
+def print_ascii_art():
     art = r"""
       ____             ___        _     _                  
      |  _ \  _____  __/ _ \ _ __ | |   (_)_ __  _   ___  __
@@ -63,35 +80,43 @@ def print_ascii_art() -> None:
     )
     print(colored(message, Fore.LIGHTWHITE_EX, Style.BRIGHT))
 
-def select_from_list(items: List[str], prompt: str = "Select an item:", input_prompt: str = "> ") -> Optional[str]:
-    print()
-    print(colored(prompt, Fore.LIGHTWHITE_EX))
-    for idx, item in enumerate(items):
-        print(colored(f"{idx + 1}.", Fore.YELLOW) + f" {item}")
-    print(colored("q. ", Fore.YELLOW) + "Quit")
-    print()
-    choice = input(input_prompt)
-    if choice.lower() == 'q':
-        return None
-    try:
-        choice_idx = int(choice) - 1
-        if 0 <= choice_idx < len(items):
-            return items[choice_idx]
-        else:
-            logger.error("Invalid choice.")
+def select_from_list(
+    items,
+    prompt: str = "Select an item:",
+    input_prompt: str = "> ",
+    formatter=str,
+    allow_refresh: bool = False,
+):
+    while True:
+        print()
+        print(colored(prompt, Fore.LIGHTWHITE_EX))
+        for idx, item in enumerate(items):
+            print(colored(f"{idx + 1}.", Fore.YELLOW) + f" {formatter(item)}")
+        if allow_refresh:
+            print(colored("r. ", Fore.YELLOW) + "Refresh")
+        print(colored("q. ", Fore.YELLOW) + "Quit")
+        print()
+        choice = input(input_prompt).strip().lower()
+        if choice == "q":
             return None
-    except ValueError:
-        logger.error("Please enter a valid number.")
-        return None
+        if allow_refresh and choice == "r":
+            return "refresh"
+        try:
+            choice_idx = int(choice) - 1
+            if 0 <= choice_idx < len(items):
+                return items[choice_idx]
+            logger.error("Invalid choice.")
+        except ValueError:
+            logger.error("Please enter a valid number.")
 
-def error_exit(message: str, enable_network: bool = False, commands = None) -> None:
-    logger.error(message)
-    if enable_network and commands:
-        commands.kill_miracle()
-        commands.enable_network_services()
-    exit(1)
+def confirm(prompt, default=False):
+    suffix = "Y/n" if default else "y/N"
+    choice = input(f"{prompt} [{suffix}] ").strip().lower()
+    if not choice:
+        return default
+    return choice in ("y", "yes")
 
-def print_adb_instructions() -> None:
+def print_adb_instructions():
     print(colored("ADB Connection Instructions:", Fore.LIGHTWHITE_EX, Style.BRIGHT))
     print()
     print(f"1. Connect your device to your PC via USB and enable USB Debugging in the developer options.")
@@ -100,7 +125,7 @@ def print_adb_instructions() -> None:
     print()
     input(colored("Press Enter when you are ready to continue...\n", Fore.LIGHTYELLOW_EX))
 
-def print_dex_instructions() -> None:
+def print_dex_instructions():
     print(colored("DeX Connection Instructions:", Fore.LIGHTWHITE_EX, Style.BRIGHT))
     print()
     print(f"1. Open DeX on your device.")
@@ -108,7 +133,12 @@ def print_dex_instructions() -> None:
     print(f"3. The program will automatically detect when your device connects via DeX.")
     print()
     print(colored("If you get disconnected, simply reconnect your device via DeX.", Fore.LIGHTYELLOW_EX))
-    print(colored("If you encounter any other issues, check the terminal for errors and report them on GitHub.", Fore.LIGHTRED_EX))
+    print("If you encounter issues, run again with --debug and include the log when reporting it.")
 
-def get_app_path() -> str:
-    return str(Path(__file__).resolve().parents[2])
+def get_asset_path(name):
+    package_asset = Path(__file__).resolve().parent / "assets" / name
+    if package_asset.is_file():
+        return str(package_asset)
+
+    repo_asset = Path(__file__).resolve().parents[2] / "assets" / name
+    return str(repo_asset)

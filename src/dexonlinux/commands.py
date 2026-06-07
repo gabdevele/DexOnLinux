@@ -6,35 +6,83 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence
-from utils import get_logger, get_app_path
+
+from dexonlinux.utils import get_asset_path, get_logger
 
 logger = get_logger()
 
 
+class CommandError(RuntimeError):
+    pass
+
+
+class AdbDevice:
+    def __init__(self, serial, state, description=""):
+        self.serial = serial
+        self.state = state
+        self.description = description
+
+    @property
+    def is_authorized(self):
+        return self.state == "device"
+
+    def label(self):
+        suffix = f" {self.description}" if self.description else ""
+        return f"{self.serial} ({self.state}){suffix}"
+
+
+class ScrcpyDisplay:
+    def __init__(self, display_id, description="", width=None, height=None):
+        self.display_id = display_id
+        self.description = description
+        self.width = width
+        self.height = height
+
+    def label(self):
+        details = []
+        if self.description:
+            details.append(self.description)
+        hint = self.hint()
+        if hint:
+            details.append(hint)
+        suffix = f" - {' | '.join(details)}" if details else ""
+        return f"display {self.display_id}{suffix}"
+
+    def hint(self):
+        if not self.width or not self.height:
+            return ""
+        if self.width > self.height:
+            return "likely DeX / external display (recommended)"
+        if self.height > self.width:
+            return "likely phone screen"
+        return ""
+
+
 class Commands:
-    REQUIRED_COMMANDS = ["sudo", "systemctl", "miracle-wifid", "miracle-sinkctl", "scrcpy", "adb", "pkill", "iw"]
+    REQUIRED_COMMANDS = ["sudo", "systemctl", "miracle-wifid", "miracle-sinkctl", "scrcpy", "adb", "iw"]
     NETWORK_SERVICES = ["NetworkManager", "wpa_supplicant"]
-    SUDO_PREFIX = ["sudo", "-S"]
+    SUDO_PREFIX = ["sudo", "-S", "-p", ""]
 
-    def __init__(self, sudo_password):
-        self.sudo_password = sudo_password + "\n"
-        self._sinkctl_master_fd: Optional[int] = None
-        if not self._check_sudo_password():
-            exit(1)
-        if not self._check_dependencies():
-            exit(1)
+    def __init__(self, sudo_password, validate=True):
+        self.sudo_password = sudo_password + "\n" if sudo_password else ""
+        self._sinkctl_master_fd = None
+        if validate:
+            self.validate_environment()
 
-    def _build_command(self, command: Sequence[str], sudo: bool = False) -> List[str]:
+    def validate_environment(self):
+        missing = self.missing_dependencies()
+        if missing:
+            raise CommandError("Missing dependencies: " + ", ".join(missing))
+        if not self.check_sudo_password():
+            raise CommandError("Incorrect sudo password.")
+
+    def missing_dependencies(self):
+        return [cmd for cmd in self.REQUIRED_COMMANDS if shutil.which(cmd) is None]
+
+    def _build_command(self, command, sudo=False):
         return [*self.SUDO_PREFIX, *command] if sudo else list(command)
 
-    def _run_command(
-        self,
-        command: Sequence[str],
-        *,
-        sudo: bool = False,
-        env: Optional[dict] = None,
-    ) -> subprocess.CompletedProcess[str]:
+    def _run_command(self, command, *, sudo=False, env=None):
         return subprocess.run(
             self._build_command(command, sudo=sudo),
             input=self.sudo_password if sudo else None,
@@ -44,26 +92,14 @@ class Commands:
             env=env,
         )
 
-    def _run_checked(
-        self,
-        command: Sequence[str],
-        *,
-        sudo: bool = False,
-        env: Optional[dict] = None,
-    ) -> subprocess.CompletedProcess[str]:
+    def _run_checked(self, command, *, sudo=False, env=None):
         result = self._run_command(command, sudo=sudo, env=env)
         if result.returncode != 0:
-            raise subprocess.CalledProcessError(result.returncode, result.args, output=result.stdout, stderr=result.stderr)
+            output = self._combine_output(result).strip()
+            raise CommandError(output or f"Command failed: {' '.join(command)}")
         return result
 
-    def _start_sudo_background_process(
-        self,
-        command: Sequence[str],
-        *,
-        stdout,
-        stderr,
-        env: Optional[dict] = None,
-    ) -> subprocess.Popen:
+    def _start_sudo_background_process(self, command, *, stdout, stderr, env=None):
         process = subprocess.Popen(
             self._build_command(command, sudo=True),
             stdin=subprocess.PIPE,
@@ -77,10 +113,10 @@ class Commands:
             process.stdin.flush()
         return process
 
-    def _combine_output(self, result: subprocess.CompletedProcess[str]) -> str:
+    def _combine_output(self, result):
         return (result.stdout or "") + (result.stderr or "")
 
-    def _close_sinkctl_fd(self) -> None:
+    def _close_sinkctl_fd(self):
         if self._sinkctl_master_fd is None:
             return
         try:
@@ -89,224 +125,201 @@ class Commands:
             pass
         self._sinkctl_master_fd = None
 
-    def _write_sinkctl_commands(self, master_fd: int, commands: Iterable[str], delay: float = 0.1) -> None:
+    def _write_sinkctl_commands(self, master_fd, commands, delay=0.1):
         for command in commands:
             os.write(master_fd, f"{command}\n".encode())
             time.sleep(delay)
-            logger.debug(f"Sent command to miracle-sinkctl: {command}")
+            logger.debug("Sent command to miracle-sinkctl: %s", command)
 
-    def _check_dependencies(self) -> bool:
-        missing = [cmd for cmd in self.REQUIRED_COMMANDS if shutil.which(cmd) is None]
-        for cmd in missing:
-            logger.error(f"Dependency '{cmd}' not found. Please install it before running the script.")
-        return not missing
-
-    def _check_sudo_password(self) -> bool:
+    def check_sudo_password(self):
         try:
             result = self._run_command(["-k", "true"], sudo=True)
-            if result.returncode == 0:
-                return True
-            logger.error("Incorrect sudo password.")
-            return False
+            return result.returncode == 0
         except FileNotFoundError:
-            logger.error("Dependency 'sudo' not found. Please install it before running the script.")
             return False
 
-    def disable_network_services(self) -> bool:
+    def disable_network_services(self):
+        self._run_checked(["systemctl", "stop", *self.NETWORK_SERVICES], sudo=True)
+        logger.info("Network services disabled.")
+
+    def enable_network_services(self):
+        self._run_checked(["systemctl", "start", *self.NETWORK_SERVICES], sudo=True)
+        logger.info("Network services restored.")
+
+    def start_miracle_wifi(self, interface):
+        command = ["miracle-wifid", "--interface", interface]
+        process = self._start_sudo_background_process(command, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+        time.sleep(0.2)
+        if process.poll() is not None:
+            raise CommandError("miracle-wifid exited immediately after startup.")
+        logger.info("miracle-wifid started on %s.", interface)
+        return process
+
+    def start_miracle_sinkctl(self, interface_index, port):
+        if interface_index is None:
+            raise CommandError("No Miraclecast interface index available.")
+
+        sinkctl_commands = [f"set-managed {interface_index} yes", f"run {interface_index}"]
+        command = ["miracle-sinkctl", "--external-player", "true", "--port", str(port), "--audio", "1"]
+
+        master_fd, slave_fd = os.openpty()
         try:
-            self._run_checked(["systemctl", "stop", *self.NETWORK_SERVICES], sudo=True)
-            logger.debug("Network services stopped.")
-            return True
-        except Exception as e:
-            logger.error(f"Error stopping network services: {e}")
-            return False
-
-    def enable_network_services(self) -> bool:
-        try:
-            self._run_checked(["systemctl", "start", *self.NETWORK_SERVICES], sudo=True)
-            logger.debug("Network services started.")
-            return True
-        except Exception as e:
-            logger.error(f"Error starting network services: {e}")
-            return False
-        
-    def start_miracle_wifi(self, interface: str, background: bool = True) -> Optional[subprocess.Popen]:
-        try:
-            command = ["miracle-wifid", "--interface", interface]
-            if not background:
-                self._run_checked(command, sudo=True)
-                logger.debug("miracle-wifid started in foreground.")
-                return None
-
-            process = self._start_sudo_background_process(command, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-            logger.debug("miracle-wifid started.")
-            return process
-        except Exception as e:
-            logger.error(f"Error starting miracle-wifid: {e}")
-            return None
-
-    def start_miracle_sinkctl(self, interface_index: int, background: bool = True, port: int = 1991) -> Optional[subprocess.Popen]:
-        commands = [f"set-managed {interface_index} yes", f"run {interface_index}"]
-        try:
-            command = ["miracle-sinkctl", "--external-player", "true", "--port", str(port), "--audio", "1"]
-
-            if not background:
-                self._run_checked(command, sudo=True)
-                logger.debug("miracle-sinkctl started in foreground.")
-                return None
-
-            master_fd, slave_fd = os.openpty()
-            process = subprocess.Popen(self._build_command(command, sudo=True), stdin=slave_fd, stdout=slave_fd, stderr=slave_fd, close_fds=True)
+            process = subprocess.Popen(
+                self._build_command(command, sudo=True),
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                close_fds=True,
+            )
+        finally:
             os.close(slave_fd)
-            self._sinkctl_master_fd = master_fd
 
-            threading.Thread(target=self._drain_sinkctl_output, args=(master_fd,), daemon=True).start()
+        self._sinkctl_master_fd = master_fd
+        threading.Thread(target=self._drain_sinkctl_output, args=(master_fd,), daemon=True).start()
 
-            os.write(master_fd, self.sudo_password.encode())
-            time.sleep(0.2)
-            self._write_sinkctl_commands(master_fd, commands)
+        os.write(master_fd, self.sudo_password.encode())
+        time.sleep(0.2)
+        self._write_sinkctl_commands(master_fd, sinkctl_commands)
 
-
-            if process.poll() is not None:
-                raise RuntimeError("miracle-sinkctl exited immediately after startup.")
-
-            logger.debug("miracle-sinkctl started.")
-            return process
-        except Exception as e:
-            logger.error(f"Error starting miracle-sinkctl: {e}")
+        if process.poll() is not None:
             self._close_sinkctl_fd()
-            return None
+            raise CommandError("miracle-sinkctl exited immediately after startup.")
 
-    def _get_port(self) -> int:
-        #os automatically assigns an available port when binding to port 0, so we can use that to find a free port
+        logger.info("miracle-sinkctl started on UDP port %s.", port)
+        return process
+
+    def get_available_udp_port(self):
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.bind(('', 0))
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                port = s.getsockname()[1]
-                return port
-        except Exception as e:
-            raise RuntimeError(f"Could not find an available port: {e}")
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.bind(("", 0))
+                return int(s.getsockname()[1])
+        except OSError as exc:
+            raise CommandError(f"Could not find an available UDP port: {exc}") from exc
 
-    def get_p2p_interfaces(self) -> List[str]:
-        #revisited method taken from: 
-        #https://github.com/semarainc/TuxDex/blob/main/capabilitiesCheck.py#L48
+    def get_p2p_interfaces(self):
         p2pwifi = []
         base_dir = Path("/sys/class/net")
 
         for iface_path in base_dir.iterdir():
-            if (iface_path / "wireless").exists():
-                iface = iface_path.name
-                try:
-                    iw_dev_result = self._run_command(["iw", "dev", iface, "info"])
-                    if iw_dev_result.returncode != 0:
-                        continue
-
-                    iw_dev = self._combine_output(iw_dev_result)
-                    wiphy_line = next((l for l in iw_dev.splitlines() if l.strip().startswith("wiphy")), None)
-                    if not wiphy_line:
-                        continue
-                    idxphy = wiphy_line.split()[1]
-                    iw_phy_result = self._run_command(["iw", "phy", f"phy{idxphy}", "info"])
-                    if iw_phy_result.returncode != 0:
-                        continue
-
-                    iw_phy = self._combine_output(iw_phy_result)
-                    
-                    if "P2P" in iw_phy:
-                        p2pwifi.append(iface)   
-                except Exception:
+            if not (iface_path / "wireless").exists():
+                continue
+            iface = iface_path.name
+            try:
+                iw_dev_result = self._run_command(["iw", "dev", iface, "info"])
+                if iw_dev_result.returncode != 0:
                     continue
+
+                iw_dev = self._combine_output(iw_dev_result)
+                wiphy_line = next((l for l in iw_dev.splitlines() if l.strip().startswith("wiphy")), None)
+                if not wiphy_line:
+                    continue
+
+                idxphy = wiphy_line.split()[1]
+                iw_phy_result = self._run_command(["iw", "phy", f"phy{idxphy}", "info"])
+                if iw_phy_result.returncode != 0:
+                    continue
+
+                if "P2P" in self._combine_output(iw_phy_result):
+                    p2pwifi.append(iface)
+            except Exception as exc:
+                logger.debug("Unable to inspect interface %s: %s", iface, exc)
         return p2pwifi
 
-    def list_adb_devices(self) -> List[str]:
+    def list_adb_devices(self):
+        result = self._run_checked(["adb", "devices", "-l"])
+        return self.parse_adb_devices(self._combine_output(result))
+
+    @staticmethod
+    def parse_adb_devices(output):
+        devices = []
+        for line in output.splitlines():
+            line = line.strip()
+            if not line or line.startswith("List of devices"):
+                continue
+            if line.startswith("*") or "daemon" in line.lower():
+                continue
+            parts = line.split(maxsplit=2)
+            if len(parts) < 2:
+                continue
+            description = parts[2] if len(parts) > 2 else ""
+            devices.append(AdbDevice(serial=parts[0], state=parts[1], description=description))
+        return devices
+
+    def list_scrcpy_displays(self, selected_device):
+        result = self._run_checked(["scrcpy", "-s", selected_device, "--list-displays"])
+        return self.parse_scrcpy_displays(self._combine_output(result))
+
+    @staticmethod
+    def parse_scrcpy_displays(output):
+        displays = []
+        pattern = re.compile(r"--display-id=(\d+)(?:\s+\((.*?)\))?")
+        resolution_pattern = re.compile(r"(\d{3,5})x(\d{3,5})")
+        for line in output.splitlines():
+            match = pattern.search(line)
+            if not match:
+                continue
+            description = match.group(2) or line.strip()
+            resolution = resolution_pattern.search(description)
+            width = int(resolution.group(1)) if resolution else None
+            height = int(resolution.group(2)) if resolution else None
+            displays.append(ScrcpyDisplay(int(match.group(1)), description, width, height))
+        return displays
+
+    def terminate_process(self, process, name, timeout=2.0):
+        if process is None or process.poll() is not None:
+            return
+        logger.debug("Stopping %s.", name)
+        process.terminate()
         try:
-            result = self._run_checked(["adb", "devices"], sudo=True)
-            output = self._combine_output(result)
-            lines = output.strip().splitlines()
-            devices = [line.split()[0] for line in lines if "device" in line and not "List" in line]
-            return devices
-        except Exception as e:
-            logger.error(f"Error listing ADB devices: {e}")
-            return []
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            logger.debug("%s did not exit after terminate; killing.", name)
+            process.kill()
+            process.wait(timeout=timeout)
 
-    def kill_miracle(self) -> None:
-        try:
-            for process_name in ("miracle-wifid", "miracle-sinkctl"):
-                self._run_command(["pkill", process_name], sudo=True)
-            self._close_sinkctl_fd()
-        except Exception:
-            pass
-        logger.debug("Killed miracle-wifid and miracle-sinkctl processes.")
+    def close_sinkctl(self):
+        self._close_sinkctl_fd()
 
-    def run_scrcpy(self, selected_device: str) -> Optional[subprocess.Popen]:
-        #handles multiple devices: https://github.com/Genymobile/scrcpy/issues/400
-        try:
-            icon_path = os.path.join(get_app_path(), "assets", "icon.png")
-            scrcpy_env = os.environ.copy()
-            if os.path.isfile(icon_path):
-                scrcpy_env["SCRCPY_ICON_PATH"] = icon_path
-                logger.debug(f"Using SCRCPY_ICON_PATH: {icon_path}")
-            else:
-                logger.warning(f"Scrcpy icon not found at: {icon_path}")
+    def run_scrcpy(self, selected_device, *, display_id=None, fullscreen=False):
+        icon_path = get_asset_path("icon.png")
+        scrcpy_env = os.environ.copy()
+        if os.path.isfile(icon_path):
+            scrcpy_env["SCRCPY_ICON_PATH"] = icon_path
 
-            display_id = self._get_display_id(selected_device)
+        args = ["-s", selected_device, "--window-title", "DexOnLinux", "--mouse-bind=++++"]
+        if fullscreen:
+            args.append("--fullscreen")
+        if display_id is not None:
+            args.extend(["--display-id", str(display_id)])
 
-            #TODO: make user choose if fullscreen or not
-            args = ["-s", selected_device, "--window-title", "DexOnLinux", "--mouse-bind=++++"]
-            
-            if display_id:
-                args.extend(["--display-id", display_id])
-            else:
-                #TODO: handle if display id is 0 and errors
-                logger.error("No display ID found for scrcpy. Defaulting to primary display.")
+        process = subprocess.Popen(
+            ["scrcpy", *args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=scrcpy_env,
+        )
 
-            process = subprocess.Popen(
-                ["scrcpy", *args],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                env=scrcpy_env,
-            )
+        if process.stdout:
+            threading.Thread(target=self._stream_scrcpy_output, args=(process,), daemon=True).start()
 
-            if process.stdout:
-                threading.Thread(target=self._stream_scrcpy_output, args=(process,), daemon=True).start()
+        time.sleep(0.2)
+        if process.poll() is not None:
+            raise CommandError("scrcpy exited immediately after startup.")
+        return process
 
-            return process
-        except Exception as e:
-            logger.error(f"Error starting scrcpy: {e}")
-            return None
-
-    def _get_display_id(self, selected_device: str) -> Optional[str]:
-        #TODO: fix if is only --display-id=0 or some errors
-        try:
-            result = self._run_command(["scrcpy", "-s", selected_device, "--list-displays"])
-            output = self._combine_output(result)
-            pattern = re.compile(r"--display-id=(\d+)")
-            matches = pattern.findall(output)
-            display_ids = [int(did) for did in matches]
-            if not display_ids:
-                return None
-
-            selected_display = max(display_ids)
-            logger.debug(f"Selected display with largest id: {selected_display}")
-            return str(selected_display)
-        except Exception as e:
-            logger.error(f"Unable to list scrcpy displays: {e}")
-            return None
-
-    def _stream_scrcpy_output(self, process: subprocess.Popen) -> None:
+    def _stream_scrcpy_output(self, process):
         if not process.stdout:
             return
 
         for line in iter(process.stdout.readline, ""):
             text = line.rstrip("\n")
             if text:
-                logger.debug("STREAM: %s", text)
+                logger.debug("scrcpy: %s", text)
 
         process.stdout.close()
 
-    def _drain_sinkctl_output(self, master_fd: int) -> None:
+    def _drain_sinkctl_output(self, master_fd):
         while True:
             try:
                 chunk = os.read(master_fd, 4096)
@@ -314,6 +327,6 @@ class Commands:
                     break
                 text = chunk.decode(errors="replace").strip()
                 if text:
-                    logger.debug("DRAIN: %s", text)
+                    logger.debug("miracle-sinkctl: %s", text)
             except OSError:
                 break
