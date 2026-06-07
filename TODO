@@ -1,0 +1,4 @@
+- manual test: full DeX connection flow on Ubuntu 24.04
+- manual test: reconnect after DeX disconnect
+- manual test: close scrcpy window and confirm DexOnLinux exits cleanly
+- future: terminal user interface built on the CLI/core session flow

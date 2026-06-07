@@ -4,15 +4,52 @@ version = "1.0.1"
 description = "DexOnLinux is a tool that allows you to stream Samsung DeX from your Samsung device to your Linux PC, controlling it with your mouse and keyboard, and interacting with it as if it were a native application on your desktop."
 readme = "README.md"
 requires-python = ">=3.9"
+keywords = ["samsung", "dex", "linux", "miraclecast", "scrcpy", "wifi-direct"]
 authors = [
     { name = "gabdevele", email = "me@gabdevele.dev" }
 ]
-license = { file = "LICENSE" }
+license = "LicenseRef-MIT-Commons-Clause"
+license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video :: Display",
+    "Topic :: System :: Networking",
+]
 dependencies = [
     "colorama==0.4.6",
-    "ptyprocess==0.7.0",
     "pycairo==1.28.0",
     "pydbus==0.6.0",
     "pygobject==3.54.2",
-    "sh==2.2.2",
 ]
+
+[project.scripts]
+dexonlinux = "dexonlinux.main:main"
+
+[project.urls]
+Homepage = "https://github.com/gabdevele/DexOnLinux"
+Repository = "https://github.com/gabdevele/DexOnLinux"
+Issues = "https://github.com/gabdevele/DexOnLinux/issues"
+
+[dependency-groups]
+dev = [
+    "build>=1.2.0",
+    "twine>=5.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+dexonlinux = ["assets/*.png"]

@@ -24,8 +24,13 @@ check_os() {
 check_python() {
     command_exists python3 || error "Python3 not installed. Run: sudo apt install python3"
     PY_VER=$(python3 -V | awk '{print $2}')
-    version_ge "$PY_VER" "3.8" || error "Python >=3.8 required (found $PY_VER)"
+    version_ge "$PY_VER" "3.9" || error "Python >=3.9 required (found $PY_VER)"
     success "Python $PY_VER detected"
+}
+
+check_uv() {
+    command_exists uv || error "uv not installed. Install it from https://docs.astral.sh/uv/ and run this script again."
+    success "uv detected: $(uv --version)"
 }
 
 install_system_deps() {
@@ -38,13 +43,9 @@ install_system_deps() {
 }
 
 setup_venv() {
-    rm -rf venv && info "Creating virtualenv..."
-    python3 -m venv venv
-    source venv/bin/activate
-    pip install --upgrade pip
-    [[ -f requirements.txt ]] && pip install -r requirements.txt || error "requirements.txt missing"
-    deactivate
-    success "Virtual environment configured"
+    info "Synchronizing Python environment with uv..."
+    uv sync --no-dev --locked --python "$(command -v python3)"
+    success "Virtual environment synchronized"
 }
 
 install_miraclecast() {
@@ -63,6 +64,8 @@ install_miraclecast() {
 
 install_scrcpy() {
     REQ="3.3.2"
+    ARCH=$(uname -m)
+    [[ "$ARCH" == "x86_64" ]] || error "Automatic scrcpy install currently supports x86_64 only (found $ARCH). Install scrcpy manually."
     if command_exists scrcpy; then
         CUR=$(scrcpy --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n1)
         version_ge "$CUR" "$REQ" && { success "Scrcpy $CUR already present"; return; }
@@ -86,6 +89,8 @@ print_usage() {
     echo ""
     info "To use DexOnLinux run:"
     echo -e "${YELLOW}./scripts/run.sh${NC}"
+    echo "or activate the environment and run:"
+    echo -e "${YELLOW}source .venv/bin/activate && dexonlinux${NC}"
     echo ""
 }
 
@@ -94,6 +99,7 @@ main() {
     cd "$PROJECT_ROOT" || error "Cannot access project directory $PROJECT_ROOT"
     check_os
     check_python
+    check_uv
     install_system_deps
     setup_venv
     install_miraclecast
