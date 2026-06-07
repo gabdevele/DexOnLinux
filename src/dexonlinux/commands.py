@@ -45,6 +45,8 @@ class ScrcpyDisplay:
         hint = self.hint()
         if hint:
             details.append(hint)
+        if not details:
+            details.append("unknown display")
         suffix = f" - {' | '.join(details)}" if details else ""
         return f"display {self.display_id}{suffix}"
 
@@ -58,10 +60,17 @@ class ScrcpyDisplay:
         return ""
 
 
+class SinkctlEvent:
+    def __init__(self, name, **data):
+        self.name = name
+        self.data = data
+
+
 class Commands:
     REQUIRED_COMMANDS = ["sudo", "systemctl", "miracle-wifid", "miracle-sinkctl", "scrcpy", "adb", "iw"]
     NETWORK_SERVICES = ["NetworkManager", "wpa_supplicant"]
     SUDO_PREFIX = ["sudo", "-S", "-p", ""]
+    SUDO_NON_INTERACTIVE_PREFIX = ["sudo", "-n"]
 
     def __init__(self, sudo_password, validate=True):
         self.sudo_password = sudo_password + "\n" if sudo_password else ""
@@ -81,6 +90,9 @@ class Commands:
 
     def _build_command(self, command, sudo=False):
         return [*self.SUDO_PREFIX, *command] if sudo else list(command)
+
+    def _build_non_interactive_sudo_command(self, command):
+        return [*self.SUDO_NON_INTERACTIVE_PREFIX, *command]
 
     def _run_command(self, command, *, sudo=False, env=None):
         return subprocess.run(
@@ -155,7 +167,7 @@ class Commands:
         logger.info("miracle-wifid started on %s.", interface)
         return process
 
-    def start_miracle_sinkctl(self, interface_index, port):
+    def start_miracle_sinkctl(self, interface_index, port, event_callback=None):
         if interface_index is None:
             raise CommandError("No Miraclecast interface index available.")
 
@@ -165,7 +177,7 @@ class Commands:
         master_fd, slave_fd = os.openpty()
         try:
             process = subprocess.Popen(
-                self._build_command(command, sudo=True),
+                self._build_non_interactive_sudo_command(command),
                 stdin=slave_fd,
                 stdout=slave_fd,
                 stderr=slave_fd,
@@ -175,9 +187,8 @@ class Commands:
             os.close(slave_fd)
 
         self._sinkctl_master_fd = master_fd
-        threading.Thread(target=self._drain_sinkctl_output, args=(master_fd,), daemon=True).start()
+        threading.Thread(target=self._drain_sinkctl_output, args=(master_fd, event_callback), daemon=True).start()
 
-        os.write(master_fd, self.sudo_password.encode())
         time.sleep(0.2)
         self._write_sinkctl_commands(master_fd, sinkctl_commands)
 
@@ -225,6 +236,12 @@ class Commands:
                 logger.debug("Unable to inspect interface %s: %s", iface, exc)
         return p2pwifi
 
+    def get_interface_index(self, interface):
+        try:
+            return int((Path("/sys/class/net") / interface / "ifindex").read_text().strip())
+        except OSError as exc:
+            raise CommandError(f"Could not read interface index for {interface}: {exc}") from exc
+
     def list_adb_devices(self):
         result = self._run_checked(["adb", "devices", "-l"])
         return self.parse_adb_devices(self._combine_output(result))
@@ -264,6 +281,36 @@ class Commands:
             height = int(resolution.group(2)) if resolution else None
             displays.append(ScrcpyDisplay(int(match.group(1)), description, width, height))
         return displays
+
+    @staticmethod
+    def parse_sinkctl_events(text):
+        events = []
+        clean_text = text.replace("\r", "\n")
+        resolution = re.search(r"SINK set resolution\s+(\d{3,5})x(\d{3,5})", clean_text)
+        if resolution:
+            width = int(resolution.group(1))
+            height = int(resolution.group(2))
+            events.append(SinkctlEvent("resolution", width=width, height=height, resolution=f"{width}x{height}"))
+
+        peer_connected_patterns = (
+            "[CONNECT] Peer:",
+            "now running on peer",
+        )
+        connected_patterns = ("NOTICE: SINK connected",)
+        disconnected_patterns = (
+            "no longer running on peer",
+            "no longer running on link",
+            "Transport endpoint is not connected",
+            "SINK disconnected",
+        )
+
+        if any(pattern in clean_text for pattern in peer_connected_patterns):
+            events.append(SinkctlEvent("peer_connected"))
+        if any(pattern in clean_text for pattern in connected_patterns):
+            events.append(SinkctlEvent("connected"))
+        if any(pattern in clean_text for pattern in disconnected_patterns):
+            events.append(SinkctlEvent("disconnected"))
+        return events
 
     def terminate_process(self, process, name, timeout=2.0):
         if process is None or process.poll() is not None:
@@ -319,14 +366,23 @@ class Commands:
 
         process.stdout.close()
 
-    def _drain_sinkctl_output(self, master_fd):
+    def _sanitize_sinkctl_output(self, text):
+        password = self.sudo_password.strip()
+        if password:
+            text = text.replace(password, "[sudo password hidden]")
+        return text
+
+    def _drain_sinkctl_output(self, master_fd, event_callback=None):
         while True:
             try:
                 chunk = os.read(master_fd, 4096)
                 if not chunk:
                     break
-                text = chunk.decode(errors="replace").strip()
+                text = self._sanitize_sinkctl_output(chunk.decode(errors="replace")).strip()
                 if text:
                     logger.debug("miracle-sinkctl: %s", text)
+                    if event_callback:
+                        for event in self.parse_sinkctl_events(text):
+                            event_callback(event)
             except OSError:
                 break

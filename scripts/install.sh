@@ -38,7 +38,6 @@ install_system_deps() {
     sudo apt-get update -qq
     sudo apt-get install -y python3-venv git wget
     sudo apt-get install -y cmake libglib2.0-dev libudev-dev libsystemd-dev libreadline-dev check libtool autoconf #Miraclecast's dependencies
-    sudo apt-get install -y libgirepository-2.0-dev gcc libcairo2-dev pkg-config python3-dev gir1.2-gtk-4.0 #PyGObject's dependencies
     success "System dependencies installed"
 }
 

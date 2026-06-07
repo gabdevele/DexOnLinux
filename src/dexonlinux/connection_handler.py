@@ -27,9 +27,11 @@ class ConnectionHandler:
         self.on_scrcpy_closed = on_scrcpy_closed
         self.scrcpy_process = None
         self.device_name = "unknown"
+        self.sink_resolution = None
         self._stop_drain = threading.Event()
         self._drain_thread = None
         self._monitor_thread = None
+        self._delayed_start_timer = None
         self._lock = threading.Lock()
 
     def stop(self):
@@ -57,6 +59,9 @@ class ConnectionHandler:
 
     def _stop_scrcpy(self):
         self._stop_drain.set()
+        if self._delayed_start_timer:
+            self._delayed_start_timer.cancel()
+            self._delayed_start_timer = None
         if self._drain_thread and self._drain_thread.is_alive():
             self._drain_thread.join(timeout=1.0)
 
@@ -86,11 +91,11 @@ class ConnectionHandler:
         if not displays:
             logger.warning("No scrcpy display id found; scrcpy will use its default display.")
             return None
-        if len(displays) == 1:
-            return displays[0].display_id
 
         print()
         print("Hint: DeX is usually the landscape 16:9 display; the phone screen is usually portrait 9:16.")
+        if self.sink_resolution:
+            print(f"Miraclecast reported DeX stream resolution: {self.sink_resolution}.")
         selected = select_from_list(
             displays,
             "Select the display to open with scrcpy:",
@@ -124,21 +129,41 @@ class ConnectionHandler:
         if friendly_name:
             self.device_name = friendly_name
 
-    def handle_connection(self, path, interface, changed, invalid):
-        self._set_device_name(changed)
-        connected = changed.get("Connected")
-        if connected is None:
+    def handle_sinkctl_event(self, event):
+        if event.name == "peer_connected":
+            logger.debug("DeX peer connected; waiting for sink stream.")
             return
-        if connected:
-            logger.info("Device %s connected via DeX.", self.device_name)
-            time.sleep(1.0)
-            try:
-                self._start_scrcpy()
-            except Exception as exc:
-                logger.error("Unable to start scrcpy: %s", exc)
-                self._stop_scrcpy()
-                if self.on_scrcpy_closed:
-                    self.on_scrcpy_closed()
-        else:
-            logger.info("Device %s disconnected from DeX.", self.device_name)
+
+        if event.name == "resolution":
+            self.sink_resolution = event.data.get("resolution")
+            logger.info("DeX stream resolution is %s.", self.sink_resolution)
+            if self._delayed_start_timer:
+                self._delayed_start_timer.cancel()
+                self._delayed_start_timer = None
+            self._start_from_sink()
+            return
+
+        if event.name == "connected":
+            logger.info("DeX stream connected.")
+            if not self._delayed_start_timer:
+                self._delayed_start_timer = threading.Timer(2.0, self._start_from_sink)
+                self._delayed_start_timer.daemon = True
+                self._delayed_start_timer.start()
+            return
+
+        if event.name == "disconnected":
+            logger.info("DeX stream disconnected.")
             self._stop_scrcpy()
+
+    def _start_from_sink(self):
+        self._delayed_start_timer = None
+        if self.scrcpy_process and self.scrcpy_process.poll() is None:
+            return
+        try:
+            time.sleep(1.0)
+            self._start_scrcpy()
+        except Exception as exc:
+            logger.error("Unable to start scrcpy: %s", exc)
+            self._stop_scrcpy()
+            if self.on_scrcpy_closed:
+                self.on_scrcpy_closed()

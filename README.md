@@ -1,4 +1,4 @@
-![DexOnLinux Logo](/assets/banner.png)
+![DexOnLinux Logo](https://raw.githubusercontent.com/gabdevele/DexOnLinux/main/assets/banner.png)
 
 # DexOnLinux
 
@@ -19,7 +19,7 @@ DexOnLinux uses several different components to achieve this such as:
 
 - **miraclecast**: A tool for Wi-Fi Direct connections, allowing your Linux PC to connect to your Samsung device.
 - **scrcpy**: A display and control application for Android devices, enabling screen mirroring and input control.
-- **pydbus**: A Python library for D-Bus, which makes it easier to read data or catch events from Miraclecast services.
+- **miracle-sinkctl logs**: DexOnLinux monitors Miraclecast output to detect DeX connection, disconnection, and stream resolution.
 
 ## How to install and run
 
@@ -71,7 +71,6 @@ Since the manual installation relies on external dependencies, I'll link the off
 
 - [miraclecast](https://github.com/albfan/miraclecast/wiki/Building)
 - [scrcpy](https://github.com/Genymobile/scrcpy/blob/master/README.md#installation)
-- [PyGObject](https://pygobject.gnome.org/getting_started.html)
 
 After installing these dependencies you will need to install Python dependencies with uv:
 
