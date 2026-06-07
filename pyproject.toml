@@ -1,6 +1,6 @@
 [project]
 name = "dexonlinux"
-version = "1.0.1"
+version = "1.0.2"
 description = "DexOnLinux is a tool that allows you to stream Samsung DeX from your Samsung device to your Linux PC, controlling it with your mouse and keyboard, and interacting with it as if it were a native application on your desktop."
 readme = "README.md"
 requires-python = ">=3.9"
