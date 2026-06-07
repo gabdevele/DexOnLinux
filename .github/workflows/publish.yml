@@ -20,7 +20,10 @@ jobs:
         run: uv python install 3.12
 
       - name: Build package
-        run: uv run --group dev python -m build
+        run: uv run --only-group dev python -m build
+
+      - name: Check package metadata
+        run: uv run --only-group dev python -m twine check dist/*
 
       - name: Upload distributions
         uses: actions/upload-artifact@v6
