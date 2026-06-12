@@ -31,25 +31,23 @@ check_python() {
 install_system_deps() {
     info "Updating packages and installing dependencies..."
     sudo apt-get update -qq
-    sudo apt-get install -y python3-venv git wget
+    sudo apt-get install -y python3-pip python3-venv git wget
     sudo apt-get install -y cmake libglib2.0-dev libudev-dev libsystemd-dev libreadline-dev check libtool autoconf #Miraclecast's dependencies
     success "System dependencies installed"
 }
 
-setup_venv() {
+install_python_package() {
     if command_exists uv; then
         success "uv detected: $(uv --version)"
-        info "Creating virtualenv with uv..."
-        uv venv --python "$(command -v python3)" .venv
-        info "Installing DexOnLinux from PyPI with uv..."
-        uv pip install --python .venv/bin/python --upgrade dexonlinux
+        info "Installing DexOnLinux from PyPI with uv tool..."
+        uv tool install --upgrade dexonlinux
     else
-        warn "uv not found; falling back to pip."
-        info "Creating virtualenv with python3..."
+        warn "uv not found; falling back to pip inside .venv."
+        info "Creating Python virtual environment..."
         python3 -m venv .venv
         info "Installing DexOnLinux from PyPI with pip..."
-        .venv/bin/python -m pip install --upgrade pip
-        .venv/bin/python -m pip install --upgrade dexonlinux
+        .venv/bin/pip install --upgrade pip
+        .venv/bin/pip install --upgrade dexonlinux
     fi
     success "Python package installed"
 }
@@ -93,8 +91,14 @@ install_scrcpy() {
 
 print_usage() {
     echo ""
-    info "DexOnLinux is installed. Run:"
-    echo -e "${YELLOW}source .venv/bin/activate && dexonlinux${NC}"
+    if command_exists uv; then
+        info "DexOnLinux is installed. Run:"
+        echo -e "${YELLOW}dexonlinux${NC}"
+    else
+        info "DexOnLinux is installed in .venv. Run:"
+        echo -e "${YELLOW}source .venv/bin/activate${NC}"
+        echo -e "${YELLOW}dexonlinux${NC}"
+    fi
     echo ""
 }
 
@@ -105,7 +109,7 @@ main() {
     check_os
     check_python
     install_system_deps
-    setup_venv
+    install_python_package
     install_miraclecast
     install_scrcpy
     success "Installation completed!"

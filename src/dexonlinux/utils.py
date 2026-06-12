@@ -75,7 +75,7 @@ def print_ascii_art():
     message = (
         "You will be asked for your sudo password to run some commands\n"
         "that require elevated privileges.\n"
-        "Your network connection will be temporarily disabled while this tool is running.\n"
+        "DexOnLinux may temporarily take over the selected Wi-Fi interface.\n"
         "For help or issues, visit: https://github.com/gabdevele/DexOnLinux\n"
     )
     print(colored(message, Fore.LIGHTWHITE_EX, Style.BRIGHT))

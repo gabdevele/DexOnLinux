@@ -2,13 +2,13 @@ import socket
 import threading
 import time
 
-from dexonlinux.commands import CommandError, Commands
+from dexonlinux.commands import CommandError
 from dexonlinux.utils import get_logger, select_from_list
 
 logger = get_logger()
 
 
-class ConnectionHandler:
+class StreamHandler:
     def __init__(
         self,
         commands,

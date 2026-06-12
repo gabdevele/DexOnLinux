@@ -4,10 +4,24 @@
 
 DexOnLinux streams Samsung DeX to a Linux desktop and lets you control it with your mouse and keyboard through scrcpy.
 
-The package is available on PyPI:
+## Installation
+
+DexOnLinux is available on PyPI.
+
+Recommended:
 
 ```bash
+uv tool install dexonlinux
+dexonlinux
+```
+
+Fallback:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install dexonlinux
+dexonlinux
 ```
 
 ## Requirements
@@ -19,15 +33,14 @@ DexOnLinux needs:
 - scrcpy
 - adb
 - a Wi-Fi adapter with P2P support
-- sudo access, because the CLI temporarily stops NetworkManager and wpa_supplicant while the DeX session is running
+- NetworkManager with `nmcli`
+- sudo access for Wi-Fi Direct setup
 
 The project is currently tested on Ubuntu 24.04.
 
-## Installation
+## Ubuntu 24.04 dependency helper
 
-### Ubuntu 24.04
-
-The helper script installs the system dependencies used by DexOnLinux and installs the `dexonlinux` package from PyPI. It uses `uv` when available and falls back to `pip`.
+The helper script installs the system dependencies used by DexOnLinux and installs the PyPI package. It uses `uv tool install` when uv is available. If uv is not installed, it creates `.venv` and installs DexOnLinux there with pip.
 
 Do not run the script with `sudo`; it will ask for sudo only when system packages need to be installed.
 
@@ -36,11 +49,22 @@ git clone https://github.com/gabdevele/DexOnLinux.git
 cd DexOnLinux
 chmod +x ./scripts/install.sh
 ./scripts/install.sh
+```
+
+If uv is available, run:
+
+```bash
+dexonlinux
+```
+
+If the script used the pip fallback, run:
+
+```bash
 source .venv/bin/activate
 dexonlinux
 ```
 
-### Other Linux distributions
+## Other Linux distributions
 
 Install Miraclecast and scrcpy using your distribution packages or their upstream instructions:
 
@@ -50,18 +74,16 @@ Install Miraclecast and scrcpy using your distribution packages or their upstrea
 Then install DexOnLinux from PyPI:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install dexonlinux
+uv tool install dexonlinux
 dexonlinux
 ```
 
-If you use uv:
+or:
 
 ```bash
-uv venv
-uv pip install dexonlinux
+python3 -m venv .venv
 source .venv/bin/activate
+pip install dexonlinux
 dexonlinux
 ```
 
@@ -73,20 +95,32 @@ Run:
 dexonlinux
 ```
 
-Useful options (these are not required, DexOnLinux works with no arguments):
+Useful options:
 
 ```bash
 dexonlinux --help
 dexonlinux --interface wlan0 --device R5CN1234567
+dexonlinux --network-mode auto
+dexonlinux --network-mode scoped
+dexonlinux --network-mode full-stop
 dexonlinux --fullscreen
 dexonlinux --display-id 2
 dexonlinux --debug --log-file dexonlinux.log
 dexonlinux --no-banner --no-color
 ```
 
-DexOnLinux checks dependencies, Wi-Fi P2P support, sudo, and adb before disabling network services. Unless `--yes` is passed, it asks for confirmation before stopping NetworkManager and wpa_supplicant.
+By default, DexOnLinux uses `--network-mode auto`.
 
-On exit, Ctrl+C, or startup failure, DexOnLinux attempts to stop the Miraclecast processes it started and restore network services.
+In auto mode, DexOnLinux checks the selected Wi-Fi interface against the current default route:
+
+- if that Wi-Fi interface is the only default route, DexOnLinux uses `full-stop`
+- if another default route is available, DexOnLinux uses `scoped`
+
+This keeps the common single-Wi-Fi setup simple and reliable. Miraclecast needs direct control of Wi-Fi Direct/P2P, so if your internet connection uses the same Wi-Fi adapter, it will go offline until DexOnLinux exits.
+
+`full-stop` stops both NetworkManager and `wpa_supplicant` while the session is running. This is the most reliable mode for single-adapter systems.
+
+`scoped` keeps NetworkManager running, releases the selected Wi-Fi interface, and stops `wpa_supplicant`. It can preserve internet through Ethernet, USB tethering, or another network path that does not depend on `wpa_supplicant`.
 
 ## How it works
 
@@ -97,9 +131,9 @@ DexOnLinux uses:
 - adb to select the Android device
 - miracle-sinkctl output to detect DeX connection, disconnection, and stream resolution
 
-## Development setup
+On exit, Ctrl+C, or startup failure, DexOnLinux stops the Miraclecast processes it started and restores the network state it changed.
 
-If you want to contribute or run the latest code, clone the repository and install the dependencies with uv:
+## Development setup
 
 ```bash
 git clone https://github.com/gabdevele/DexOnLinux.git
@@ -108,6 +142,16 @@ uv sync --group dev --locked
 uv run dexonlinux --help
 ```
 
-## Bugs and feature requests
+Build and check the package:
 
-Please report any bugs or feature requests on the GitHub issue tracker.
+```bash
+uv run --only-group dev python -m build
+uv run --only-group dev python -m twine check dist/*
+```
+
+## Troubleshooting
+
+- `unauthorized` adb device: accept the USB debugging prompt on the phone.
+- `offline` adb device: reconnect USB, then run `adb kill-server && adb start-server`.
+- Wrong display: reconnect DeX and choose the display marked as likely DeX, or pass `--display-id`.
+- Network not restored: run `sudo systemctl start NetworkManager wpa_supplicant`, or reconnect the Wi-Fi interface from NetworkManager.

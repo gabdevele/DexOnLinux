@@ -7,6 +7,8 @@ import threading
 import time
 from pathlib import Path
 
+from dexonlinux.models import AdbDevice, ScrcpyDisplay, SinkctlEvent
+from dexonlinux.network import InterfaceInfo, NmcliDevice
 from dexonlinux.utils import get_asset_path, get_logger
 
 logger = get_logger()
@@ -16,65 +18,16 @@ class CommandError(RuntimeError):
     pass
 
 
-class AdbDevice:
-    def __init__(self, serial, state, description=""):
-        self.serial = serial
-        self.state = state
-        self.description = description
-
-    @property
-    def is_authorized(self):
-        return self.state == "device"
-
-    def label(self):
-        suffix = f" {self.description}" if self.description else ""
-        return f"{self.serial} ({self.state}){suffix}"
-
-
-class ScrcpyDisplay:
-    def __init__(self, display_id, description="", width=None, height=None):
-        self.display_id = display_id
-        self.description = description
-        self.width = width
-        self.height = height
-
-    def label(self):
-        details = []
-        if self.description:
-            details.append(self.description)
-        hint = self.hint()
-        if hint:
-            details.append(hint)
-        if not details:
-            details.append("unknown display")
-        suffix = f" - {' | '.join(details)}" if details else ""
-        return f"display {self.display_id}{suffix}"
-
-    def hint(self):
-        if not self.width or not self.height:
-            return ""
-        if self.width > self.height:
-            return "likely DeX / external display (recommended)"
-        if self.height > self.width:
-            return "likely phone screen"
-        return ""
-
-
-class SinkctlEvent:
-    def __init__(self, name, **data):
-        self.name = name
-        self.data = data
-
-
 class Commands:
-    REQUIRED_COMMANDS = ["sudo", "systemctl", "miracle-wifid", "miracle-sinkctl", "scrcpy", "adb", "iw"]
+    BASE_REQUIRED_COMMANDS = ["sudo", "miracle-wifid", "miracle-sinkctl", "scrcpy", "adb", "iw"]
     NETWORK_SERVICES = ["NetworkManager", "wpa_supplicant"]
     SUDO_PREFIX = ["sudo", "-S", "-p", ""]
     SUDO_NON_INTERACTIVE_PREFIX = ["sudo", "-n"]
 
-    def __init__(self, sudo_password, validate=True):
+    def __init__(self, sudo_password, validate=True, network_mode="auto"):
         self.sudo_password = sudo_password + "\n" if sudo_password else ""
         self._sinkctl_master_fd = None
+        self.network_mode = network_mode
         if validate:
             self.validate_environment()
 
@@ -86,7 +39,14 @@ class Commands:
             raise CommandError("Incorrect sudo password.")
 
     def missing_dependencies(self):
-        return [cmd for cmd in self.REQUIRED_COMMANDS if shutil.which(cmd) is None]
+        commands = list(self.BASE_REQUIRED_COMMANDS)
+        if self.network_mode in ("auto", "scoped"):
+            commands.append("nmcli")
+            commands.append("ip")
+            commands.append("systemctl")
+        if self.network_mode == "full-stop":
+            commands.append("systemctl")
+        return [cmd for cmd in commands if shutil.which(cmd) is None]
 
     def _build_command(self, command, sudo=False):
         return [*self.SUDO_PREFIX, *command] if sudo else list(command)
@@ -157,6 +117,18 @@ class Commands:
     def enable_network_services(self):
         self._run_checked(["systemctl", "start", *self.NETWORK_SERVICES], sudo=True)
         logger.info("Network services restored.")
+
+    def is_service_active(self, service):
+        result = self._run_command(["systemctl", "is-active", service])
+        return result.stdout.strip() == "active"
+
+    def stop_wpa_supplicant(self):
+        self._run_checked(["systemctl", "stop", "wpa_supplicant"], sudo=True)
+        logger.info("wpa_supplicant stopped.")
+
+    def start_wpa_supplicant(self):
+        self._run_checked(["systemctl", "start", "wpa_supplicant"], sudo=True)
+        logger.info("wpa_supplicant restored.")
 
     def start_miracle_wifi(self, interface):
         command = ["miracle-wifid", "--interface", interface]
@@ -236,6 +208,70 @@ class Commands:
                 logger.debug("Unable to inspect interface %s: %s", iface, exc)
         return p2pwifi
 
+    def get_interface_infos(self):
+        devices = {device.device: device for device in self.get_nmcli_devices()}
+        return [InterfaceInfo(iface, devices.get(iface)) for iface in self.get_p2p_interfaces()]
+
+    def get_nmcli_devices(self):
+        result = self._run_checked(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"])
+        return self.parse_nmcli_devices(self._combine_output(result))
+
+    def get_nmcli_device(self, interface):
+        for device in self.get_nmcli_devices():
+            if device.device == interface:
+                return device
+        return NmcliDevice(interface)
+
+    def get_active_connection_uuid(self, interface):
+        result = self._run_checked(["nmcli", "-t", "-f", "UUID,TYPE,DEVICE", "connection", "show", "--active"])
+        for line in self._combine_output(result).splitlines():
+            parts = line.split(":", 2)
+            if len(parts) == 3 and parts[1] == "802-11-wireless" and parts[2] == interface:
+                return parts[0]
+        return ""
+
+    def get_default_route_interfaces(self):
+        result = self._run_checked(["ip", "route", "show", "default"])
+        interfaces = []
+        for line in self._combine_output(result).splitlines():
+            parts = line.split()
+            if "dev" not in parts:
+                continue
+            index = parts.index("dev")
+            if index + 1 < len(parts):
+                interfaces.append(parts[index + 1])
+        return interfaces
+
+    @staticmethod
+    def parse_nmcli_devices(output):
+        devices = []
+        for line in output.splitlines():
+            if not line.strip():
+                continue
+            parts = line.split(":", 3)
+            while len(parts) < 4:
+                parts.append("")
+            devices.append(NmcliDevice(parts[0], parts[1], parts[2], parts[3].replace("\\:", ":")))
+        return devices
+
+    def nmcli_disconnect(self, interface):
+        self._run_checked(["nmcli", "device", "disconnect", interface], sudo=True)
+        logger.info("Disconnected %s from NetworkManager.", interface)
+
+    def nmcli_connect(self, interface):
+        self._run_checked(["nmcli", "device", "connect", interface])
+
+    def nmcli_connection_up(self, connection_uuid, interface):
+        self._run_checked(["nmcli", "connection", "up", "uuid", connection_uuid, "ifname", interface])
+
+    def nmcli_set_managed(self, interface, managed):
+        value = "yes" if managed else "no"
+        self._run_checked(["nmcli", "device", "set", interface, "managed", value], sudo=True)
+
+    def ip_link_up(self, interface):
+        self._run_checked(["ip", "link", "set", "dev", interface, "up"], sudo=True)
+        logger.debug("Brought %s up for Miraclecast.", interface)
+
     def get_interface_index(self, interface):
         try:
             return int((Path("/sys/class/net") / interface / "ifindex").read_text().strip())
@@ -285,30 +321,32 @@ class Commands:
     @staticmethod
     def parse_sinkctl_events(text):
         events = []
-        clean_text = text.replace("\r", "\n")
+        clean_text = re.sub(r"\x1b\[[0-9;]*m", "", text.replace("\r", "\n")) #remove ANSI color codes
+        
         resolution = re.search(r"SINK set resolution\s+(\d{3,5})x(\d{3,5})", clean_text)
         if resolution:
             width = int(resolution.group(1))
             height = int(resolution.group(2))
             events.append(SinkctlEvent("resolution", width=width, height=height, resolution=f"{width}x{height}"))
 
-        peer_connected_patterns = (
+        PEER_CONNECTED_STRINGS = [
             "[CONNECT] Peer:",
             "now running on peer",
-        )
-        connected_patterns = ("NOTICE: SINK connected",)
-        disconnected_patterns = (
+        ]
+        DISCONNECTED_STRINGS = [
+            "NOTICE: SINK disconnected",
+            "[DISCONNECT] Peer:",
             "no longer running on peer",
             "no longer running on link",
-            "Transport endpoint is not connected",
-            "SINK disconnected",
-        )
+        ]
 
-        if any(pattern in clean_text for pattern in peer_connected_patterns):
+        if any(s in clean_text for s in PEER_CONNECTED_STRINGS):
             events.append(SinkctlEvent("peer_connected"))
-        if any(pattern in clean_text for pattern in connected_patterns):
+        
+        if "NOTICE: SINK connected" in clean_text:
             events.append(SinkctlEvent("connected"))
-        if any(pattern in clean_text for pattern in disconnected_patterns):
+
+        if (any(s in clean_text for s in DISCONNECTED_STRINGS)):
             events.append(SinkctlEvent("disconnected"))
         return events
 
@@ -332,6 +370,8 @@ class Commands:
         scrcpy_env = os.environ.copy()
         if os.path.isfile(icon_path):
             scrcpy_env["SCRCPY_ICON_PATH"] = icon_path
+            scrcpy_env["SCRCPY_ICON_DIR"] = os.path.dirname(icon_path)
+            logger.debug("Using scrcpy icon: %s", icon_path)
 
         args = ["-s", selected_device, "--window-title", "DexOnLinux", "--mouse-bind=++++"]
         if fullscreen:

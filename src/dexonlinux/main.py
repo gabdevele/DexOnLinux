@@ -1,12 +1,9 @@
 import argparse
 import getpass
-import signal
 import sys
-import threading
-import time
 
 from dexonlinux.commands import CommandError, Commands
-from dexonlinux.connection_handler import ConnectionHandler
+from dexonlinux.runtime import run_dex_session
 from dexonlinux.utils import (
     colored,
     configure_logger,
@@ -14,44 +11,11 @@ from dexonlinux.utils import (
     get_logger,
     print_adb_instructions,
     print_ascii_art,
-    print_dex_instructions,
     select_from_list,
 )
 from colorama import Fore
 
 logger = get_logger()
-
-
-class DexRuntime:
-    def __init__(self, commands):
-        self.commands = commands
-        self.network_disabled = False
-        self.miracle_wifi = None
-        self.miracle_sinkctl = None
-        self.connection_handler = None
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc, traceback):
-        self.cleanup()
-        return False
-
-    def disable_network(self):
-        self.commands.disable_network_services()
-        self.network_disabled = True
-
-    def cleanup(self):
-        if self.connection_handler:
-            self.connection_handler.stop()
-        self.commands.terminate_process(self.miracle_sinkctl, "miracle-sinkctl")
-        self.commands.close_sinkctl()
-        self.commands.terminate_process(self.miracle_wifi, "miracle-wifid")
-        if self.network_disabled:
-            try:
-                self.commands.enable_network_services()
-            except Exception as exc:
-                logger.error("Network services could not be restored automatically: %s", exc)
 
 
 def build_parser():
@@ -64,26 +28,69 @@ def build_parser():
     parser.add_argument("--debug", action="store_true", help="Show debug logs.")
     parser.add_argument("--no-color", action="store_true", help="Disable colored terminal output.")
     parser.add_argument("--no-banner", action="store_true", help="Do not print the ASCII banner.")
-    parser.add_argument("--yes", action="store_true", help="Do not ask before temporarily disabling network services.")
+    parser.add_argument("--yes", action="store_true", help="Do not ask before preparing the network interface.")
     parser.add_argument("--log-file", help="Write debug logs to a file.")
+    parser.add_argument(
+        "--network-mode",
+        choices=["auto", "scoped", "full-stop"],
+        default="auto",
+        help="How DexOnLinux prepares the Wi-Fi interface for Miraclecast.",
+    )
     return parser
 
 
 def choose_interface(commands, requested):
-    interfaces = commands.get_p2p_interfaces()
+    interfaces = get_available_interfaces(commands)
     if requested:
-        if requested not in interfaces:
-            available = ", ".join(interfaces) if interfaces else "none"
+        names = interface_names(interfaces)
+        if requested not in names:
+            available = ", ".join(names) if names else "none"
             raise CommandError(f"Interface '{requested}' is not available or not P2P-capable. Available: {available}")
+        selected = next(interface for interface in interfaces if interface_name(interface) == requested)
+        ensure_interface_available(selected)
         return requested
 
     if not interfaces:
         raise CommandError("No P2P-capable Wi-Fi interfaces found.")
 
-    selected = select_from_list(interfaces, "Select a P2P-capable interface:")
+    selected = select_from_list(
+        interfaces,
+        "Select a P2P-capable interface:",
+        formatter=interface_label,
+    )
     if selected is None:
         raise CommandError("No interface selected.")
-    return selected
+    ensure_interface_available(selected)
+    return interface_name(selected)
+
+
+def get_available_interfaces(commands):
+    if commands.network_mode in ("auto", "scoped"):
+        return commands.get_interface_infos()
+    return commands.get_p2p_interfaces()
+
+
+def interface_names(interfaces):
+    return [interface_name(interface) for interface in interfaces]
+
+
+def interface_name(interface):
+    if hasattr(interface, "name"):
+        return interface.name
+    return interface
+
+
+def interface_label(interface):
+    if hasattr(interface, "label"):
+        return interface.label()
+    return interface
+
+
+def ensure_interface_available(interface):
+    if hasattr(interface, "is_available") and not interface.is_available:
+        raise CommandError(
+            f"Interface '{interface.name}' is unavailable. Enable Wi-Fi and retry: nmcli radio wifi on"
+        )
 
 
 def choose_adb_device(commands, requested):
@@ -127,76 +134,71 @@ def choose_adb_device(commands, requested):
             raise CommandError("No ADB device selected.")
 
 
-def prepare_commands():
-    probe = Commands("", validate=False)
+def prepare_commands(network_mode):
+    probe = Commands("", validate=False, network_mode=network_mode)
     missing = probe.missing_dependencies()
     if missing:
         raise CommandError("Missing dependencies: " + ", ".join(missing))
 
     sudo_password = getpass.getpass(f"[sudo] password for {getpass.getuser()}: ")
-    return Commands(sudo_password, validate=True)
+    return Commands(sudo_password, validate=True, network_mode=network_mode)
+
+
+def resolve_network_mode(commands, interface, requested_mode):
+    if requested_mode != "auto":
+        return requested_mode
+
+    default_interfaces = commands.get_default_route_interfaces()
+    other_default_interfaces = [name for name in default_interfaces if name != interface]
+    if default_interfaces and not other_default_interfaces:
+        logger.info("Auto network mode selected full-stop: %s is the only default network route.", interface)
+        return "full-stop"
+
+    if other_default_interfaces:
+        logger.info("Auto network mode selected scoped: another default route is available.")
+    else:
+        logger.info("Auto network mode selected scoped: no default network route was detected.")
+    return "scoped"
+
+
+def confirm_network_mode(commands, interface, network_mode, args):
+    if args.yes:
+        return
+
+    if network_mode == "full-stop":
+        message = "DexOnLinux will stop NetworkManager and wpa_supplicant. Continue?"
+        if not confirm(message, default=False):
+            raise CommandError("Aborted before disabling network services.")
+        return
+
+    device = commands.get_nmcli_device(interface)
+    if device.is_connected:
+        print()
+        print(f"{interface} appears to be connected to {device.connection or 'a network'}.")
+        print("DexOnLinux will disconnect it and stop wpa_supplicant so Miraclecast can use Wi-Fi Direct.")
+        print("Wi-Fi internet will be unavailable until the session ends; non-Wi-Fi routes like Ethernet can stay online.")
+    else:
+        print()
+        print("DexOnLinux will stop wpa_supplicant so Miraclecast can use Wi-Fi Direct.")
+        print("Network connections that depend on wpa_supplicant may be unavailable until the session ends.")
+    message = f"DexOnLinux will temporarily prepare {interface} for Miraclecast. Continue?"
+    if not confirm(message, default=False):
+        raise CommandError("Aborted before preparing the network interface.")
 
 
 def run(args):
     if not args.no_banner:
         print_ascii_art()
 
-    commands = prepare_commands()
+    commands = prepare_commands(args.network_mode)
     selected_interface = choose_interface(commands, args.interface)
     selected_device = choose_adb_device(commands, args.device)
+    network_mode = resolve_network_mode(commands, selected_interface, args.network_mode)
 
-    if not args.yes:
-        ok = confirm("DexOnLinux will temporarily disable NetworkManager and wpa_supplicant. Continue?", default=False)
-        if not ok:
-            raise CommandError("Aborted before disabling network services.")
+    confirm_network_mode(commands, selected_interface, network_mode, args)
+    args.network_mode = network_mode
 
-    with DexRuntime(commands) as runtime:
-        runtime.disable_network()
-        runtime.miracle_wifi = commands.start_miracle_wifi(selected_interface)
-
-        interface_index = commands.get_interface_index(selected_interface)
-        port = args.port or commands.get_available_udp_port()
-        stop_requested = threading.Event()
-
-        handler = ConnectionHandler(
-            commands,
-            selected_device.serial,
-            port,
-            display_id=args.display_id,
-            fullscreen=args.fullscreen,
-            on_scrcpy_closed=stop_requested.set,
-        )
-        runtime.connection_handler = handler
-        runtime.miracle_sinkctl = commands.start_miracle_sinkctl(
-            interface_index,
-            port,
-            event_callback=handler.handle_sinkctl_event,
-        )
-
-        print_dex_instructions()
-
-        interrupted = False
-
-        def request_stop(signum, frame):
-            nonlocal interrupted
-            interrupted = True
-            stop_requested.set()
-
-        previous_sigint = signal.signal(signal.SIGINT, request_stop)
-        previous_sigterm = signal.signal(signal.SIGTERM, request_stop)
-        try:
-            logger.info("Waiting for DeX connection. Press CTRL+C to exit.")
-            while not stop_requested.is_set():
-                if runtime.miracle_wifi.poll() is not None:
-                    raise CommandError("miracle-wifid stopped unexpectedly.")
-                if runtime.miracle_sinkctl.poll() is not None:
-                    raise CommandError("miracle-sinkctl stopped unexpectedly.")
-                time.sleep(0.25)
-        finally:
-            signal.signal(signal.SIGINT, previous_sigint)
-            signal.signal(signal.SIGTERM, previous_sigterm)
-
-        return 130 if interrupted else 0
+    return run_dex_session(commands, selected_interface, selected_device, args)
 
 
 def main(argv=None):
