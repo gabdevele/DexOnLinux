@@ -29,6 +29,9 @@ WFD_THROUGHPUT = 0x00C8  # 100 Mbps
 ANDROID_GO_IP = "192.168.49.1"
 ANDROID_CLIENT_IP = "192.168.49.2"
 DEFAULT_GO_INTENT = 7
+# Keep the P2P group off the STA's 5 GHz block: iwlwifi + 160 MHz STA cannot
+# hold a second 5 GHz channel, so wpa_supplicant tears the group down.
+P2P_OPER_FREQ = 2437  # 2.4 GHz channel 6
 
 GO_NEG_RE = re.compile(
     r"P2P-GO-NEG-REQUEST (?P<mac>[0-9a-fA-F:]{17})"
@@ -49,11 +52,30 @@ class Emitter:
             print(payload, flush=True)
 
 
+def _event_value(line: str, name: str) -> str:
+    match = re.search(rf"\b{re.escape(name)}=([^\s]+)", line)
+    return match.group(1) if match else ""
+
+
+def _prefix_from_mask(mask: str) -> int:
+    try:
+        return sum(bin(int(part)).count("1") for part in mask.split("."))
+    except ValueError:
+        return 24
+
+
 class Linkd:
-    def __init__(self, interface: str, device_info: int, emitter: Emitter) -> None:
+    def __init__(
+        self,
+        interface: str,
+        device_info: int,
+        emitter: Emitter,
+        p2p_freq: int = P2P_OPER_FREQ,
+    ) -> None:
         self.interface = interface
         self.device_info = device_info
         self.emitter = emitter
+        self.p2p_freq = p2p_freq
         self.ctrl = SupplicantControl(interface)
         self.stop_event = threading.Event()
 
@@ -140,6 +162,9 @@ class Linkd:
         no group state but the kernel link still present. Ask the supplicant
         to remove it, then delete the link if it lingers.
         """
+        if os.geteuid() != 0:
+            LOG.debug("skipping stale group cleanup (not root)")
+            return
         result = subprocess.run(["iw", "dev"], check=False, capture_output=True, text=True)
         if result.returncode != 0:
             return
@@ -154,7 +179,22 @@ class Linkd:
         for ifname in groups:
             LOG.info("removing stale P2P group interface %s", ifname)
             self._cmd_ok(f"P2P_GROUP_REMOVE {ifname}")
-            subprocess.run(["ip", "link", "del", ifname], check=False, capture_output=True)
+            if not os.path.exists(f"/sys/class/net/{ifname}"):
+                continue
+            # The supplicant no longer tracks an orphaned group link. Delete
+            # it through nl80211 first; ip link del can be refused for P2P.
+            for command in (["iw", "dev", ifname, "del"], ["ip", "link", "del", ifname]):
+                if not os.path.exists(f"/sys/class/net/{ifname}"):
+                    break
+                result = subprocess.run(command, check=False, capture_output=True, text=True)
+                if result.returncode == 0:
+                    LOG.info("removed %s with %s", ifname, " ".join(command))
+                    break
+                LOG.warning(
+                    "%s failed: %s",
+                    " ".join(command),
+                    (result.stderr or result.stdout).strip(),
+                )
 
     # -- main loop ----------------------------------------------------------
 
@@ -229,9 +269,15 @@ class Linkd:
         if self._last_pin:
             # Samsung DeX uses WPS display PIN (the phone is the keypad side).
             LOG.info("GO negotiation from %s; retrying with the display PIN", mac)
-            self._cmd_ok(f"P2P_CONNECT {mac} {self._last_pin} display go_intent=0")
+            self._connect_peer(mac, f"{self._last_pin} display")
         else:
-            self._cmd_ok(f"P2P_CONNECT {mac} pbc go_intent=0")
+            self._connect_peer(mac, "pbc")
+
+    def _connect_peer(self, mac: str, wps: str) -> None:
+        """Start the client connect, preferring a 2.4 GHz operating channel."""
+        frequency = f" freq={self.p2p_freq}" if self.p2p_freq else ""
+        LOG.info("P2P_CONNECT %s (%s)%s go_intent=0", mac, wps, frequency)
+        self._cmd_ok(f"P2P_CONNECT {mac} {wps}{frequency} go_intent=0")
 
     def _handle_show_pin(self, line: str) -> None:
         parts = line.split()
@@ -246,7 +292,7 @@ class Linkd:
         # The phone enters this PIN next. Register the display method now,
         # otherwise the GO negotiation falls back to PBC and is rejected.
         self._pending_connect_until = time.monotonic() + 60.0
-        self._cmd_ok(f"P2P_CONNECT {mac} {pin} display go_intent=0")
+        self._connect_peer(mac, f"{pin} display")
 
     def _handle_pbc_req(self, line: str) -> None:
         parts = line.split()
@@ -258,7 +304,7 @@ class Linkd:
         self._last_pin = None
         LOG.info("phone requested PBC; starting GO negotiation")
         self._pending_connect_until = time.monotonic() + 60.0
-        self._cmd_ok(f"P2P_CONNECT {mac} pbc go_intent=0")
+        self._connect_peer(mac, "pbc")
 
     def _handle_group_started(self, line: str) -> None:
         match = re.match(r"P2P-GROUP-STARTED (\S+) (\S+)", line)
@@ -269,21 +315,52 @@ class Linkd:
         ifname, role = match.group(1), match.group(2).lower()
         self.group_ifname, self.group_role = ifname, role
         self._pending_connect_until = 0.0
-        LOG.info("group started: ifname=%s role=%s", ifname, role)
-        self.emitter.emit("group_started", ifname=ifname, role=role)
+        client_ip = _event_value(line, "ip_addr")
+        go_ip = _event_value(line, "go_ip_addr")
+        mask = _event_value(line, "ip_mask")
+        prefix = _prefix_from_mask(mask) if mask else 24
+        LOG.info(
+            "group started: ifname=%s role=%s client_ip=%s go_ip=%s",
+            ifname,
+            role,
+            client_ip or "?",
+            go_ip or "?",
+        )
+        self.emitter.emit(
+            "group_started",
+            ifname=ifname,
+            role=role,
+            client_ip=client_ip,
+            go_ip=go_ip,
+        )
 
         if role != "client":
             LOG.error("phone negotiated us as GO; this spike only supports the client role")
             self.emitter.emit("error", code="go-role", message="sink became GO; client role required")
             return
 
-        self._session_thread = threading.Thread(target=self._run_session, args=(ifname,), daemon=True)
+        self._session_thread = threading.Thread(
+            target=self._run_session,
+            args=(ifname, client_ip, prefix, go_ip),
+            daemon=True,
+        )
         self._session_thread.start()
 
     # -- WFD session --------------------------------------------------------
 
-    def _run_session(self, ifname: str) -> None:
-        peer_ip = self._configure_address(ifname)
+    def _run_session(
+        self,
+        ifname: str,
+        client_ip: str = "",
+        prefix: int = 24,
+        go_ip: str = "",
+    ) -> None:
+        if client_ip:
+            peer_ip = go_ip or ANDROID_GO_IP
+            self._configure_from_group(ifname, client_ip, prefix, peer_ip)
+        else:
+            peer_ip = self._configure_address(ifname)
+
         deadline = time.monotonic() + 25.0
         while not self.stop_event.is_set() and time.monotonic() < deadline:
             sink = WfdSink(peer_ip, RTSP_PORT, on_event=self._on_wfd_event)
@@ -296,12 +373,27 @@ class Linkd:
                 return
             except OSError as exc:
                 LOG.info("RTSP connect to %s:%d failed (%s); retrying", peer_ip, RTSP_PORT, exc)
-                time.sleep(1.0)
+                time.sleep(0.25)
             finally:
                 with self._lock:
                     self._sink = None
 
         self.emitter.emit("error", code="rtsp-unreachable", message=f"could not reach {peer_ip}:{RTSP_PORT}")
+
+    def _configure_from_group(self, ifname: str, ip: str, prefix: int, peer_ip: str) -> None:
+        # The GO's WPS credentials already carry the client address; use it
+        # instead of DHCP so the RTSP connect starts before the phone's
+        # display session times out. The link itself is already up.
+        self._ip_addr_replace(ifname, f"{ip}/{prefix}")
+        self._log_interface_state(ifname)
+        self.emitter.emit(
+            "ip_acquired",
+            ifname=ifname,
+            ip=ip,
+            prefix=prefix,
+            router=peer_ip,
+            source="p2p",
+        )
 
     def _configure_address(self, ifname: str) -> str:
         # The group interface starts with no IPv4 address. A UDP socket bound
@@ -393,6 +485,7 @@ def main(argv: list | None = None) -> int:
     parser = argparse.ArgumentParser(description="DexOnLinux WFD sink spike helper (root)")
     parser.add_argument("--interface", required=True)
     parser.add_argument("--device-info", default=f"{WFD_SINK_BITS:04x}", help="WFD Device Info bitmap (hex)")
+    parser.add_argument("--p2p-freq", type=int, default=P2P_OPER_FREQ, help="P2P operating frequency in MHz (default 2437)")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args(argv)
 
@@ -403,7 +496,7 @@ def main(argv: list | None = None) -> int:
     )
 
     emitter = Emitter()
-    linkd = Linkd(args.interface, int(args.device_info, 16), emitter)
+    linkd = Linkd(args.interface, int(args.device_info, 16), emitter, args.p2p_freq)
 
     def _stop(_signum, _frame):
         linkd.stop()

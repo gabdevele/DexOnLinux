@@ -125,6 +125,8 @@ class Runner:
             self.args.interface,
             "--device-info",
             self.args.device_info,
+            "--p2p-freq",
+            str(self.args.p2p_freq),
         ]
         if self.args.debug:
             command.append("--debug")
@@ -254,7 +256,10 @@ class Runner:
         elif name == "invitation_received":
             log("il telefono ha inviato un invito P2P; se fallisce, rimuovi DexOnLinux dai dispositivi salvati")
         elif name == "group_started":
-            log(f"P2P group up ({data.get('ifname')}, role {data.get('role')})")
+            log(
+                f"P2P group up ({data.get('ifname')}, role {data.get('role')}, "
+                f"client {data.get('client_ip') or '?'}, phone {data.get('go_ip') or '?'})"
+            )
         elif name == "ip_acquired":
             log(f"address {data.get('ip')}/{data.get('prefix')} on {data.get('ifname')}; phone {data.get('router')}")
         elif name == "session_connected":
@@ -281,6 +286,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fullscreen", action="store_true", help="start scrcpy fullscreen")
     parser.add_argument("--no-scrcpy", action="store_true", help="do not start scrcpy automatically")
     parser.add_argument("--device-info", default="0011", help="WFD Device Info bitmap (hex)")
+    parser.add_argument("--p2p-freq", type=int, default=2437, help="P2P operating frequency in MHz (default 2437, 2.4 GHz ch 6)")
     parser.add_argument("--debug", action="store_true", help="verbose helper logs")
     args = parser.parse_args(argv)
 

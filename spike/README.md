@@ -8,8 +8,8 @@ before building the real implementation:
    *system* wpa_supplicant);
 2. the phone's **display-PIN** provision discovery is answered and the laptop joins as
    P2P **client** (`go_intent=0`, phone becomes GO);
-3. the P2P interface gets an address via DHCP and the laptop connects to the phone's RTSP
-   server on TCP 7236;
+3. the P2P interface gets the address carried in the WPS credentials and the laptop
+   connects to the phone's RTSP server on TCP 7236;
 4. the M1–M7 handshake completes and DeX stays alive while the RTP stream is discarded;
 5. **Wi-Fi internet keeps working** on the same adapter for the whole session.
 
@@ -26,8 +26,12 @@ migration logic. Do not build on top of this code.
 - On exit it clears the subelements, disables WFD if it was previously off, restores
   `p2p_go_intent=7` and removes the P2P group. `device_name` stays `DexOnLinux` until
   the supplicant restarts (cosmetic; see *Cleanup*).
-- Creates a P2P group interface (`p2p-*`) and adds an address on it. It never installs a
-  default route, so the home Wi-Fi keeps carrying internet traffic.
+- Creates a P2P group interface (`p2p-*`) and adds the address supplied by the phone's
+  WPS credentials (DHCP is only a fallback). It never installs a default route, so the
+  home Wi-Fi keeps carrying internet traffic.
+- Requests a **2.4 GHz** operating channel (`freq=2437`) for the P2P group. With a 5 GHz
+  STA, iwlwifi + wpa_supplicant cannot keep a second 5 GHz channel alive (especially with
+  a 160 MHz STA); the group is torn down immediately. 2.4 GHz + 5 GHz concurrency works.
 - If killed with `SIGKILL`, the supplicant settings can remain set; see *Cleanup* below.
 
 ## Requirements
@@ -47,6 +51,7 @@ python3 selftest_rtsp.py         # RTSP state machine, no phone needed
 python3 selftest_supplicant.py   # ctrl_iface replies/event queue, no root needed
 python3 selftest_events.py       # P2P event -> supplicant command mapping, no root needed
 python3 run.py --interface wlp0s20f3
+# optional: --p2p-freq 2412|2437|2462 if 2.4 GHz channel 6 is congested
 ```
 
 `run.py` asks for the sudo password once, then starts the root helper. On the phone:
@@ -65,8 +70,8 @@ phone is negotiating (aa:bb:cc:dd:ee:ff)
 PIN RICHIESTO DAL TELEFONO: 12345678
 Inseriscilo ORA nella schermata 'Connessione wireless'.
 ============================================================
-P2P group up (p2p-wlp0s20f3-0, role client)
-address 192.168.x.y/24 on p2p-wlp0s20f3-0; phone 192.168.49.1
+P2P group up (p2p-wlp0s20-0, role client, client 192.168.49.200, phone 192.168.49.1)
+address 192.168.49.200/24 on p2p-wlp0s20-0; phone 192.168.49.1
 RTSP connected to the phone
 negotiated video formats: ...
 DeX session established
@@ -91,7 +96,8 @@ ping -c 5 1.1.1.1      # must stay at 0% loss during the DeX session
 - Samsung DeX does **not** use PBC. It sends a P2P provision-discovery request with the
   WPS **display** method; the supplicant generates a PIN and emits
   `P2P-PROV-DISC-SHOW-PIN`. The phone then shows a PIN entry dialog.
-- The helper reacts immediately with `P2P_CONNECT <mac> <pin> display go_intent=0`.
+- The helper reacts immediately with
+  `P2P_CONNECT <mac> <pin> display freq=2437 go_intent=0`.
   Waiting for `P2P-GO-NEG-REQUEST` and using PBC fails: the phone rejects the WPS method.
 - Every new attempt generates a **new PIN**. Always enter the latest one printed; an old
   PIN is rejected.
@@ -115,10 +121,15 @@ ping -c 5 1.1.1.1      # must stay at 0% loss during the DeX session
   then select it again.
 - **Group formed but role is `GO`** — the phone negotiated us as group owner; this spike
   only supports the client role (and its DHCP client). Report the log line.
-- **`RTSP connect ... failed`** — check the phone address (`ip addr` on the `p2p-*`
-  interface, DHCP lease log) and that `ping <phone-ip>` works.
-- **DHCP failed** — the spike falls back to `192.168.49.2/24` and phone `192.168.49.1`.
-  Report whether the fallback was used.
+- **`RTSP connect ... failed`** — check the address on the `p2p-*` interface and that
+  `ping 192.168.49.1` works. If the group interface is DOWN, the phone removed the group
+  (often a channel conflict; see below).
+- **Group disappears immediately / interface DOWN** — the P2P channel conflicts with the
+  STA. The helper already requests 2.4 GHz (`freq=2437`). If the phone still picks a 5 GHz
+  channel, try another 2.4 GHz channel (`--p2p-freq 2412` or `2462`) and check
+  `journalctl -b -u wpa_supplicant` for `FREQ_CONFLICT`/`Assoc conflicting freq`.
+- **DHCP failed** — only occurs if the group event has no WPS address; the spike falls
+  back to `192.168.49.2/24` and phone `192.168.49.1`. Report whether the fallback was used.
 - **`pin_entry_required`** — the phone displays a PIN that the laptop is supposed to
   enter. This spike has no PIN input UI; report it (Samsung uses the opposite direction).
 
@@ -144,6 +155,6 @@ sudo wpa_cli -p /run/wpa_supplicant -i "$I" set p2p_go_intent 7
 | `supplicant.py` | wpa_supplicant control-interface client (P2P + WFD commands) |
 | `selftest_supplicant.py` | fake ctrl socket: replies + event queueing |
 | `dhcp.py` | minimal DHCP client for the P2P interface (never adds a default route) |
-| `linkd.py` | root helper: supplicant + DHCP + RTSP, JSON events on stdout |
+| `linkd.py` | root helper: supplicant + address + RTSP, JSON events on stdout |
 | `selftest_events.py` | offline tests for the P2P event → command mapping (WFD/PIN) |
 | `run.py` | user runner: sudo auth, helper lifecycle, PIN display, scrcpy |

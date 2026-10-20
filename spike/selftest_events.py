@@ -60,7 +60,7 @@ def test_show_pin_starts_display_connect() -> None:
         f"P2P-PROV-DISC-SHOW-PIN {MAC} 12345678 p2p_dev_addr={MAC} name='phone'"
     )
     assert linkd._last_pin == "12345678"
-    assert f"P2P_CONNECT {MAC} 12345678 display go_intent=0" in ctrl.commands, ctrl.commands
+    assert f"P2P_CONNECT {MAC} 12345678 display freq=2437 go_intent=0" in ctrl.commands, ctrl.commands
     assert ("pin_required", {"peer": MAC, "pin": "12345678"}) in emitter.events
     print("PASS: display PIN starts the PIN-method GO negotiation")
 
@@ -68,7 +68,7 @@ def test_show_pin_starts_display_connect() -> None:
 def test_go_neg_without_pin_uses_pbc() -> None:
     linkd, ctrl, _ = make_linkd()
     linkd._handle_event(f"P2P-GO-NEG-REQUEST {MAC} dev_passwd_id=4 go_intent=15")
-    assert f"P2P_CONNECT {MAC} pbc go_intent=0" in ctrl.commands, ctrl.commands
+    assert f"P2P_CONNECT {MAC} pbc freq=2437 go_intent=0" in ctrl.commands, ctrl.commands
     print("PASS: GO negotiation without a PIN falls back to PBC")
 
 
@@ -77,7 +77,7 @@ def test_go_neg_with_pin_reuses_display_pin() -> None:
     linkd._handle_event(f"P2P-PROV-DISC-SHOW-PIN {MAC} 87654321 p2p_dev_addr={MAC}")
     linkd._pending_connect_until = 0.0
     linkd._handle_event(f"P2P-GO-NEG-REQUEST {MAC} dev_passwd_id=5 go_intent=15")
-    assert f"P2P_CONNECT {MAC} 87654321 display go_intent=0" in ctrl.commands, ctrl.commands
+    assert f"P2P_CONNECT {MAC} 87654321 display freq=2437 go_intent=0" in ctrl.commands, ctrl.commands
     print("PASS: GO negotiation reuses the display PIN")
 
 
@@ -85,8 +85,33 @@ def test_pbc_request_starts_pbc_connect() -> None:
     linkd, ctrl, _ = make_linkd()
     linkd._handle_event(f"P2P-PROV-DISC-PBC-REQ {MAC} p2p_dev_addr={MAC}")
     assert linkd._last_pin is None
-    assert f"P2P_CONNECT {MAC} pbc go_intent=0" in ctrl.commands, ctrl.commands
+    assert f"P2P_CONNECT {MAC} pbc freq=2437 go_intent=0" in ctrl.commands, ctrl.commands
     print("PASS: PBC provision discovery starts a PBC connect")
+
+
+def test_group_started_uses_wps_address() -> None:
+    linkd, _, _ = make_linkd()
+    captured: dict[str, object] = {}
+
+    def fake_session(ifname: str, client_ip: str = "", prefix: int = 24, go_ip: str = "") -> None:
+        captured.update(ifname=ifname, client_ip=client_ip, prefix=prefix, go_ip=go_ip)
+
+    linkd._run_session = fake_session  # type: ignore[method-assign]
+    linkd._handle_event(
+        "P2P-GROUP-STARTED p2p-test client ssid=\"DIRECT-x\" freq=2437 "
+        "go_dev_addr=aa:bb:cc:dd:ee:ff ip_addr=192.168.49.200 "
+        "ip_mask=255.255.255.0 go_ip_addr=192.168.49.1"
+    )
+    assert linkd._session_thread is not None
+    linkd._session_thread.join(timeout=1.0)
+    assert captured == {
+        "ifname": "p2p-test",
+        "client_ip": "192.168.49.200",
+        "prefix": 24,
+        "go_ip": "192.168.49.1",
+    }, captured
+    assert linkd_module._prefix_from_mask("255.255.255.0") == 24
+    print("PASS: group event supplies the WPS client address and GO address")
 
 
 def test_cleanup_restores_wfd_and_go_intent() -> None:
@@ -112,6 +137,7 @@ def main() -> int:
         test_go_neg_without_pin_uses_pbc,
         test_go_neg_with_pin_reuses_display_pin,
         test_pbc_request_starts_pbc_connect,
+        test_group_started_uses_wps_address,
         test_cleanup_restores_wfd_and_go_intent,
     ]
     for test in tests:
