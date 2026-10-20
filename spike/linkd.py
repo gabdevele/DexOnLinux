@@ -184,10 +184,8 @@ class Linkd:
                     continue
                 if ifname in seen:
                     continue
-                if self._is_link_up(ifname):
-                    seen.add(ifname)
-                    continue
-                self._link_up(ifname)
+                if not self._is_link_up(ifname):
+                    self._link_up(ifname)
                 if self._is_link_up(ifname):
                     self._ip_addr_replace(ifname, f"{ANDROID_WPS_CLIENT_IP}/24")
                     seen.add(ifname)

@@ -48,8 +48,14 @@ def main() -> int:
         print(f"FAIL: M4 body missing {missing!r}\n--- M4 ---\n{m4}")
         return 1
 
-    if not any(m.is_request and m.method.upper() == "SETUP" for m in source.received):
+    setup_requests = [
+        m for m in source.received if m.is_request and m.method.upper() == "SETUP"
+    ]
+    if not setup_requests:
         print("FAIL: sink never sent SETUP")
+        return 1
+    if setup_requests[0].url != "rtsp://127.0.0.1/wfd1.0/streamid=0":
+        print(f"FAIL: malformed SETUP URL: {setup_requests[0].url!r}")
         return 1
     if not any(m.is_request and m.method.upper() == "PLAY" for m in source.received):
         print("FAIL: sink never sent PLAY")

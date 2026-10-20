@@ -321,7 +321,10 @@ class WfdSink:
         self._reply(message)
 
     def _handle_parameters(self, params: dict[str, str]) -> None:
-        url = params.get("wfd_presentation_url")
+        raw_url = params.get("wfd_presentation_url", "")
+        # The source appends a secondary URL (" none") after the primary;
+        # RTSP SETUP/PLAY must use only the first token.
+        url = raw_url.split()[0] if raw_url else ""
         if url:
             self._presentation_url = url
             LOG.info("presentation URL: %s", url)
