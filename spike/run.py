@@ -10,6 +10,7 @@ import argparse
 import getpass
 import json
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -229,6 +230,29 @@ class Runner:
             log("on the phone: Smart View / Cast -> select DexOnLinux -> connect")
         elif name == "go_negotiation_requested":
             log(f"phone is negotiating ({data.get('peer')})")
+        elif name == "pin_required":
+            pin = data.get("pin", "?")
+            log("=" * 60)
+            log(f"PIN RICHIESTO DAL TELEFONO: {pin}")
+            log("Inseriscilo ORA nella schermata 'Connessione wireless'.")
+            log("=" * 60)
+            if shutil.which("notify-send"):
+                subprocess.run(
+                    [
+                        "notify-send",
+                        "-u",
+                        "critical",
+                        "-t",
+                        "0",
+                        "DexOnLinux: PIN",
+                        f"Inserisci {pin} sul telefono",
+                    ],
+                    check=False,
+                )
+        elif name == "pin_entry_required":
+            log("il telefono mostra un PIN: inseriscilo sul telefono (flusso non supportato)")
+        elif name == "invitation_received":
+            log("il telefono ha inviato un invito P2P; se fallisce, rimuovi DexOnLinux dai dispositivi salvati")
         elif name == "group_started":
             log(f"P2P group up ({data.get('ifname')}, role {data.get('role')})")
         elif name == "ip_acquired":

@@ -60,6 +60,8 @@ class Linkd:
         self.group_ifname = ""
         self.group_role = ""
         self._pending_connect_until = 0.0
+        self._last_pin: str | None = None
+        self._previous_wifi_display = "0"
         self._session_thread: threading.Thread | None = None
         self._sink: WfdSink | None = None
         self._lock = threading.Lock()
@@ -91,12 +93,25 @@ class Linkd:
         return f"000006{self.device_info:04x}{RTSP_PORT:04x}{WFD_THROUGHPUT:04x}"
 
     def _apply_settings(self) -> None:
+        # WFD_SUBELEM_SET only stores the IEs; wifi_display_update_wfd_ie()
+        # drops them while global->wifi_display is false. Enable WFD first.
+        try:
+            self._previous_wifi_display = (
+                self.ctrl.command("GET wifi_display").strip() or "0"
+            )
+        except SupplicantError:
+            self._previous_wifi_display = "0"
+
+        if not self._cmd_ok("SET wifi_display 1", required=True):
+            return
         # Required: without WFD subelements the phone cannot see a sink.
         if not self._cmd_ok(f"WFD_SUBELEM_SET all {self._wfd_ies_hex()}", required=True):
             return
         self._cmd_ok("SET p2p_go_intent 0")
         self._cmd_ok("SET device_name DexOnLinux")
-        self._cmd_ok("P2P_EXT_LISTEN 200 1000")
+        # DeX sends a single provision-discovery frame; a 200/1000 duty cycle
+        # can miss it. Listen for the whole interval instead.
+        self._cmd_ok("P2P_EXT_LISTEN 1000 1000")
         LOG.info("advertising as WFD sink (IEs %s)", self._wfd_ies_hex())
 
     def _cleanup(self) -> None:
@@ -111,7 +126,10 @@ class Linkd:
             self._cmd_ok(f"P2P_GROUP_REMOVE {self.group_ifname}")
         self._cmd_ok("P2P_EXT_LISTEN")  # no args = disable
         self._cmd_ok("WFD_SUBELEM_SET 0 ")  # clear Device Info subelement
+        if self._previous_wifi_display != "1":
+            self._cmd_ok("SET wifi_display 0")
         self._cmd_ok(f"SET p2p_go_intent {DEFAULT_GO_INTENT}")
+        self._last_pin = None
         self.ctrl.close()
 
     # -- main loop ----------------------------------------------------------
@@ -122,6 +140,24 @@ class Linkd:
                 self._handle_event(line)
 
     def _handle_event(self, line: str) -> None:
+        if line.startswith("P2P-PROV-DISC-SHOW-PIN "):
+            self._handle_show_pin(line)
+            return
+
+        if line.startswith("P2P-PROV-DISC-PBC-REQ "):
+            self._handle_pbc_req(line)
+            return
+
+        if line.startswith("P2P-PROV-DISC-ENTER-PIN "):
+            LOG.warning("phone displays a PIN we would need to enter: %s", line)
+            self.emitter.emit("pin_entry_required", line=line)
+            return
+
+        if line.startswith("P2P-INVITATION-RECEIVED "):
+            LOG.info("invitation received: %s", line)
+            self.emitter.emit("invitation_received", line=line)
+            return
+
         if line.startswith("P2P-GO-NEG-REQUEST "):
             self._handle_go_negotiation(line)
             return
@@ -135,6 +171,7 @@ class Linkd:
             self.emitter.emit("group_finished", reason=line)
             self.group_ifname = ""
             self.group_role = ""
+            self._last_pin = None
             return
 
         if line.startswith(("P2P-GO-NEG-FAILURE", "P2P-GROUP-FORMATION-FAILURE")):
@@ -163,10 +200,39 @@ class Linkd:
         if time.monotonic() < self._pending_connect_until:
             LOG.info("connect already pending; ignoring duplicate request")
             return
-        if passwd != 0:
-            # 4 == PBC; anything else would need a PIN flow (out of spike scope).
-            LOG.warning("unsupported WPS method id %d; trying PBC anyway", passwd)
 
+        self._pending_connect_until = time.monotonic() + 60.0
+        if self._last_pin:
+            # Samsung DeX uses WPS display PIN (the phone is the keypad side).
+            LOG.info("GO negotiation from %s; retrying with the display PIN", mac)
+            self._cmd_ok(f"P2P_CONNECT {mac} {self._last_pin} display go_intent=0")
+        else:
+            self._cmd_ok(f"P2P_CONNECT {mac} pbc go_intent=0")
+
+    def _handle_show_pin(self, line: str) -> None:
+        parts = line.split()
+        if len(parts) < 3:
+            LOG.warning("unparsed PIN event: %s", line)
+            return
+
+        mac, pin = parts[1], parts[2]
+        self._last_pin = pin
+        LOG.info("phone requested display PIN %s; starting GO negotiation", pin)
+        self.emitter.emit("pin_required", peer=mac, pin=pin)
+        # The phone enters this PIN next. Register the display method now,
+        # otherwise the GO negotiation falls back to PBC and is rejected.
+        self._pending_connect_until = time.monotonic() + 60.0
+        self._cmd_ok(f"P2P_CONNECT {mac} {pin} display go_intent=0")
+
+    def _handle_pbc_req(self, line: str) -> None:
+        parts = line.split()
+        if len(parts) < 2:
+            LOG.warning("unparsed PBC request: %s", line)
+            return
+
+        mac = parts[1]
+        self._last_pin = None
+        LOG.info("phone requested PBC; starting GO negotiation")
         self._pending_connect_until = time.monotonic() + 60.0
         self._cmd_ok(f"P2P_CONNECT {mac} pbc go_intent=0")
 
