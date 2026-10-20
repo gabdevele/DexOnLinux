@@ -55,6 +55,21 @@ def _iface_mac(ifname: str) -> bytes:
         return bytes.fromhex(handle.read().strip().replace(":", ""))
 
 
+def _wait_for_carrier(ifname: str, timeout: float = 5.0) -> None:
+    """Wait until the P2P client interface is associated (carrier up)."""
+    deadline = time.monotonic() + timeout
+    path = f"/sys/class/net/{ifname}/carrier"
+    while time.monotonic() < deadline:
+        try:
+            with open(path, "r", encoding="ascii") as handle:
+                if handle.read().strip() == "1":
+                    return
+        except OSError:
+            pass
+        time.sleep(0.1)
+    LOG.warning("%s has no carrier after %.1fs; trying DHCP anyway", ifname, timeout)
+
+
 def _build_packet(xid: int, msg_type: int, mac: bytes, requested_ip: str = "", server_id: str = "") -> bytes:
     header = struct.pack(
         "!BBBBIHHIIII16s64s128s",
@@ -106,21 +121,26 @@ def _parse_options(payload: bytes) -> dict[int, bytes]:
             break
         length = payload[index]
         index += 1
-        options[code] = payload[index:index + length]
+        value = payload[index:index + length]
+        if len(value) != length:
+            break
+        options[code] = value
         index += length
     return options
 
 
 def _parse_reply(payload: bytes) -> _Reply:
     options = _parse_options(payload)
-    msg_type = options.get(53, b"\x00")[0]
+    msg_type = options[53][0] if options.get(53) else 0
     prefix = 0
     if 1 in options and len(options[1]) == 4:
         prefix = bin(struct.unpack("!I", options[1])[0]).count("1")
     router = ""
     if 3 in options and len(options[3]) >= 4:
         router = socket.inet_ntoa(options[3][:4])
-    server = socket.inet_ntoa(options[54]) if 54 in options else ""
+    server = ""
+    if 54 in options and len(options[54]) == 4:
+        server = socket.inet_ntoa(options[54])
     return _Reply(
         message_type=msg_type,
         ip=socket.inet_ntoa(payload[16:20]),
@@ -149,6 +169,7 @@ def acquire(ifname: str, timeout: float = 12.0) -> Lease:
     """Run DISCOVER/REQUEST and configure the interface; no default route."""
     mac = _iface_mac(ifname)
     subprocess.run(["ip", "link", "set", "dev", ifname, "up"], check=True, capture_output=True)
+    _wait_for_carrier(ifname)
     xid = random.getrandbits(32)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -165,7 +186,10 @@ def acquire(ifname: str, timeout: float = 12.0) -> Lease:
     lease: Lease | None = None
     try:
         while time.monotonic() < deadline and lease is None:
-            sock.sendto(_build_packet(xid, DISCOVER, mac), (BROADCAST, SERVER_PORT))
+            try:
+                sock.sendto(_build_packet(xid, DISCOVER, mac), (BROADCAST, SERVER_PORT))
+            except OSError as exc:
+                raise DhcpError(f"cannot send DHCPDISCOVER on {ifname}: {exc}") from exc
             LOG.info("DHCPDISCOVER on %s (xid %08x)", ifname, xid)
 
             offer = _await(sock, xid, OFFER, deadline)

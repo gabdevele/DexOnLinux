@@ -280,9 +280,14 @@ class Linkd:
         self.emitter.emit("error", code="rtsp-unreachable", message=f"could not reach {peer_ip}:{RTSP_PORT}")
 
     def _configure_address(self, ifname: str) -> str:
+        # The group interface starts with no IPv4 address. A UDP socket bound
+        # to it cannot send to 255.255.255.255 until a connected route exists,
+        # so seed Android's default client address first (no default route).
+        self._ip_addr_replace(ifname, f"{ANDROID_CLIENT_IP}/24")
         try:
             lease = dhcp.acquire(ifname, timeout=12.0)
             peer_ip = lease.router or ANDROID_GO_IP
+            self._log_interface_state(ifname)
             self.emitter.emit(
                 "ip_acquired",
                 ifname=ifname,
@@ -294,11 +299,8 @@ class Linkd:
             return peer_ip
         except (dhcp.DhcpError, OSError, subprocess.SubprocessError) as exc:
             LOG.warning("DHCP failed on %s (%s); trying static defaults", ifname, exc)
-            subprocess.run(
-                ["ip", "addr", "replace", f"{ANDROID_CLIENT_IP}/24", "dev", ifname],
-                check=False,
-                capture_output=True,
-            )
+            self._ip_addr_replace(ifname, f"{ANDROID_CLIENT_IP}/24")
+            self._log_interface_state(ifname)
             self.emitter.emit(
                 "ip_acquired",
                 ifname=ifname,
@@ -308,6 +310,29 @@ class Linkd:
                 source="static",
             )
             return ANDROID_GO_IP
+
+    def _ip_addr_replace(self, ifname: str, address: str) -> None:
+        result = subprocess.run(
+            ["ip", "addr", "replace", address, "dev", ifname],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            LOG.warning(
+                "ip addr replace %s on %s failed: %s",
+                address,
+                ifname,
+                result.stderr.strip(),
+            )
+
+    def _log_interface_state(self, ifname: str) -> None:
+        for command in (
+            ["ip", "-brief", "addr", "show", "dev", ifname],
+            ["ip", "route", "show", "dev", ifname],
+        ):
+            result = subprocess.run(command, check=False, capture_output=True, text=True)
+            LOG.info("%s: %s", " ".join(command), result.stdout.strip() or "(empty)")
 
     def _on_wfd_event(self, name: str, data: dict) -> None:
         if name == "connected":
