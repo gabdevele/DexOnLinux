@@ -93,6 +93,7 @@ class Linkd:
         return f"000006{self.device_info:04x}{RTSP_PORT:04x}{WFD_THROUGHPUT:04x}"
 
     def _apply_settings(self) -> None:
+        self._remove_stale_groups()
         # WFD_SUBELEM_SET only stores the IEs; wifi_display_update_wfd_ie()
         # drops them while global->wifi_display is false. Enable WFD first.
         try:
@@ -131,6 +132,29 @@ class Linkd:
         self._cmd_ok(f"SET p2p_go_intent {DEFAULT_GO_INTENT}")
         self._last_pin = None
         self.ctrl.close()
+
+    def _remove_stale_groups(self) -> None:
+        """Remove P2P group interfaces left behind by a failed session.
+
+        The phone can tear the group down first, leaving the supplicant with
+        no group state but the kernel link still present. Ask the supplicant
+        to remove it, then delete the link if it lingers.
+        """
+        result = subprocess.run(["iw", "dev"], check=False, capture_output=True, text=True)
+        if result.returncode != 0:
+            return
+        current = ""
+        groups: list[str] = []
+        for line in result.stdout.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("Interface "):
+                current = stripped.split()[1]
+            elif stripped in {"type P2P-client", "type P2P-GO"} and current:
+                groups.append(current)
+        for ifname in groups:
+            LOG.info("removing stale P2P group interface %s", ifname)
+            self._cmd_ok(f"P2P_GROUP_REMOVE {ifname}")
+            subprocess.run(["ip", "link", "del", ifname], check=False, capture_output=True)
 
     # -- main loop ----------------------------------------------------------
 
