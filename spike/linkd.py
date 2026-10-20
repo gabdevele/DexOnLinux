@@ -430,14 +430,31 @@ class Linkd:
         self.emitter.emit("error", code="rtsp-unreachable", message=f"could not reach {peer_ip}:{RTSP_PORT}")
 
     def _configure_from_group(self, ifname: str, ip: str, prefix: int, peer_ip: str) -> None:
-        # The watcher has already set the netdev up before association. If
-        # it missed the short window, fall back to setting it here, but that
-        # can make the driver deauthenticate the client, so log it.
+        # The watcher preconfigures the link and address before association.
+        # Changing either after P2P-GROUP-STARTED makes mac80211 deauth the
+        # client, so do not touch the link here. If preconfiguration was
+        # missed, fail with a clear error instead of killing the group.
         if not self._is_link_up(ifname):
-            LOG.warning("%s is still down after group start; bringing it up now", ifname)
-            self._link_up(ifname)
+            LOG.error("%s is down after group start; preconfiguration was missed", ifname)
+            self.emitter.emit(
+                "error",
+                code="link-not-preconfigured",
+                message=f"{ifname} is down; retry the session",
+            )
+            return
         if not self._has_address(ifname, ip):
-            self._ip_addr_replace(ifname, f"{ip}/{prefix}")
+            LOG.error(
+                "%s does not have the preconfigured address %s/%d",
+                ifname,
+                ip,
+                prefix,
+            )
+            self.emitter.emit(
+                "error",
+                code="address-not-preconfigured",
+                message=f"{ifname} is missing {ip}/{prefix}; retry the session",
+            )
+            return
         self._log_interface_state(ifname)
         self.emitter.emit(
             "ip_acquired",
