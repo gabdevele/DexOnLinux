@@ -28,6 +28,7 @@ RTSP_PORT = 7236
 WFD_THROUGHPUT = 0x00C8  # 100 Mbps
 ANDROID_GO_IP = "192.168.49.1"
 ANDROID_CLIENT_IP = "192.168.49.2"
+ANDROID_WPS_CLIENT_IP = "192.168.49.200"
 DEFAULT_GO_INTENT = 7
 # Keep the P2P group off the STA's 5 GHz block: iwlwifi + 160 MHz STA cannot
 # hold a second 5 GHz channel, so wpa_supplicant tears the group down.
@@ -188,8 +189,13 @@ class Linkd:
                     continue
                 self._link_up(ifname)
                 if self._is_link_up(ifname):
+                    self._ip_addr_replace(ifname, f"{ANDROID_WPS_CLIENT_IP}/24")
                     seen.add(ifname)
-                    LOG.info("pre-upped P2P group interface %s", ifname)
+                    LOG.info(
+                        "pre-upped P2P group interface %s (address %s)",
+                        ifname,
+                        ANDROID_WPS_CLIENT_IP,
+                    )
             time.sleep(0.02)
 
     @staticmethod
@@ -432,7 +438,8 @@ class Linkd:
         if not self._is_link_up(ifname):
             LOG.warning("%s is still down after group start; bringing it up now", ifname)
             self._link_up(ifname)
-        self._ip_addr_replace(ifname, f"{ip}/{prefix}")
+        if not self._has_address(ifname, ip):
+            self._ip_addr_replace(ifname, f"{ip}/{prefix}")
         self._log_interface_state(ifname)
         self.emitter.emit(
             "ip_acquired",
@@ -442,6 +449,15 @@ class Linkd:
             router=peer_ip,
             source="p2p",
         )
+
+    def _has_address(self, ifname: str, ip: str) -> bool:
+        result = subprocess.run(
+            ["ip", "-brief", "addr", "show", "dev", ifname],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return f"{ip}/" in result.stdout
 
     def _link_up(self, ifname: str) -> None:
         result = subprocess.run(
