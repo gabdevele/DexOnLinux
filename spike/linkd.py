@@ -84,6 +84,7 @@ class Linkd:
         self._pending_connect_until = 0.0
         self._last_pin: str | None = None
         self._previous_wifi_display = "0"
+        self._previous_level = "INFO"
         self._session_thread: threading.Thread | None = None
         self._sink: WfdSink | None = None
         self._lock = threading.Lock()
@@ -92,6 +93,11 @@ class Linkd:
 
     def run(self) -> int:
         self.ctrl.open()
+        try:
+            self._previous_level = self.ctrl.command("LEVEL").strip() or "INFO"
+            self.ctrl.command("LEVEL DEBUG")
+        except SupplicantError:
+            self._previous_level = "INFO"
         self.emitter.emit(
             "ready",
             interface=self.interface,
@@ -102,6 +108,7 @@ class Linkd:
         )
         try:
             self._apply_settings()
+            threading.Thread(target=self._group_link_watcher, daemon=True).start()
             self._loop()
         except SupplicantError as exc:
             self.emitter.emit("error", code="supplicant", message=str(exc))
@@ -152,8 +159,46 @@ class Linkd:
         if self._previous_wifi_display != "1":
             self._cmd_ok("SET wifi_display 0")
         self._cmd_ok(f"SET p2p_go_intent {DEFAULT_GO_INTENT}")
+        if self._previous_level:
+            self._cmd_ok(f"LEVEL {self._previous_level}")
         self._last_pin = None
         self.ctrl.close()
+
+    def _group_link_watcher(self) -> None:
+        """Bring new P2P group netdevs up before the supplicant associates.
+
+        Setting the netdev up after association makes iwlwifi/mac80211
+        deauthenticate the P2P client (observed as a local deauth a few ms
+        after P2P-GROUP-STARTED). The group netdev appears during GO
+        negotiation, so poll for it and set IFF_UP early.
+        """
+        seen: set[str] = set()
+        while not self.stop_event.is_set():
+            try:
+                names = os.listdir("/sys/class/net")
+            except OSError:
+                names = []
+            for ifname in names:
+                if not ifname.startswith("p2p-") or ifname.startswith("p2p-dev-"):
+                    continue
+                if ifname in seen:
+                    continue
+                if self._is_link_up(ifname):
+                    seen.add(ifname)
+                    continue
+                self._link_up(ifname)
+                if self._is_link_up(ifname):
+                    seen.add(ifname)
+                    LOG.info("pre-upped P2P group interface %s", ifname)
+            time.sleep(0.02)
+
+    @staticmethod
+    def _is_link_up(ifname: str) -> bool:
+        try:
+            with open(f"/sys/class/net/{ifname}/flags", "r", encoding="ascii") as handle:
+                return bool(int(handle.read().strip(), 16) & 0x1)
+        except (OSError, ValueError):
+            return False
 
     def _remove_stale_groups(self) -> None:
         """Remove P2P group interfaces left behind by a failed session.
@@ -381,12 +426,12 @@ class Linkd:
         self.emitter.emit("error", code="rtsp-unreachable", message=f"could not reach {peer_ip}:{RTSP_PORT}")
 
     def _configure_from_group(self, ifname: str, ip: str, prefix: int, peer_ip: str) -> None:
-        # The GO's WPS credentials already carry the client address; use it
-        # instead of DHCP so the RTSP connect starts before the phone's
-        # display session times out. The supplicant creates the netdev down,
-        # so bring it up before adding the address (otherwise the route is
-        # linkdown and RTSP fails with EHOSTUNREACH).
-        self._link_up(ifname)
+        # The watcher has already set the netdev up before association. If
+        # it missed the short window, fall back to setting it here, but that
+        # can make the driver deauthenticate the client, so log it.
+        if not self._is_link_up(ifname):
+            LOG.warning("%s is still down after group start; bringing it up now", ifname)
+            self._link_up(ifname)
         self._ip_addr_replace(ifname, f"{ip}/{prefix}")
         self._log_interface_state(ifname)
         self.emitter.emit(
@@ -511,7 +556,8 @@ def main(argv: list | None = None) -> int:
 
     logging.basicConfig(
         level=logging.DEBUG if args.debug else logging.INFO,
-        format="%(levelname)s %(name)s: %(message)s",
+        format="%(asctime)s.%(msecs)03d %(levelname)s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
         stream=sys.stderr,
     )
 
