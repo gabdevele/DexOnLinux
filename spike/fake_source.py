@@ -33,6 +33,7 @@ class FakeSource:
         self.session_id = "12345678"
         self.received: list[Message] = []
         self.m4_body = ""
+        self.keepalive_reply: Message | None = None
         self.error: BaseException | None = None
         self._pending: list[Message] = []
         self._done = threading.Event()
@@ -153,7 +154,7 @@ class FakeSource:
         assert play.header("session").startswith(self.session_id), "PLAY without session"
 
         # M16 keepalive
-        self._send_and_wait_reply(
+        self.keepalive_reply = self._send_and_wait_reply(
             conn,
             "GET_PARAMETER",
             "rtsp://localhost/wfd1.0",

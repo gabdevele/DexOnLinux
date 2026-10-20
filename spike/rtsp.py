@@ -293,6 +293,11 @@ class WfdSink:
             return
 
         if method == "GET_PARAMETER":
+            # M16 keepalive carries a Session header and expects a bare 200.
+            # M3 (capability query) has no Session and expects the M4 body.
+            if message.header("session"):
+                self._reply(message)
+                return
             body = (
                 f"wfd_content_protection: none\r\n"
                 f"wfd_video_formats: {self.VIDEO_FORMATS}\r\n"

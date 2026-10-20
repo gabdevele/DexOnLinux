@@ -54,6 +54,9 @@ def main() -> int:
     if not any(m.is_request and m.method.upper() == "PLAY" for m in source.received):
         print("FAIL: sink never sent PLAY")
         return 1
+    if source.keepalive_reply is None or source.keepalive_reply.body:
+        print("FAIL: M16 keepalive must get a bare 200 response")
+        return 1
 
     print("PASS: M1-M7 handshake, keepalive and teardown completed")
     return 0
