@@ -154,7 +154,7 @@ class Linkd:
         if self._session_thread is not None:
             self._session_thread.join(timeout=2.0)
         if self.group_ifname:
-            self._cmd_ok(f"P2P_GROUP_REMOVE {self.group_ifname}")
+            self._remove_group_interface(self.group_ifname)
         self._cmd_ok("P2P_EXT_LISTEN")  # no args = disable
         self._cmd_ok("WFD_SUBELEM_SET 0 ")  # clear Device Info subelement
         if self._previous_wifi_display != "1":
@@ -225,25 +225,47 @@ class Linkd:
                 current = stripped.split()[1]
             elif stripped in {"type P2P-client", "type P2P-GO"} and current:
                 groups.append(current)
+        failed: list[str] = []
         for ifname in groups:
             LOG.info("removing stale P2P group interface %s", ifname)
-            self._cmd_ok(f"P2P_GROUP_REMOVE {ifname}")
-            if not os.path.exists(f"/sys/class/net/{ifname}"):
-                continue
-            # The supplicant no longer tracks an orphaned group link. Delete
-            # it through nl80211 first; ip link del can be refused for P2P.
-            for command in (["iw", "dev", ifname, "del"], ["ip", "link", "del", ifname]):
-                if not os.path.exists(f"/sys/class/net/{ifname}"):
-                    break
-                result = subprocess.run(command, check=False, capture_output=True, text=True)
-                if result.returncode == 0:
-                    LOG.info("removed %s with %s", ifname, " ".join(command))
-                    break
-                LOG.warning(
-                    "%s failed: %s",
-                    " ".join(command),
-                    (result.stderr or result.stdout).strip(),
-                )
+            if not self._remove_group_interface(ifname):
+                failed.append(ifname)
+        if failed:
+            raise SupplicantError(
+                "could not remove stale P2P interface(s): " + ", ".join(failed)
+            )
+
+    def _remove_group_interface(self, ifname: str) -> bool:
+        """Remove a P2P group link, including orphaned netdevs.
+
+        The supplicant can forget the group after a deauth and still leave the
+        netdev behind. The stale P2P-client link then occupies the driver's
+        only P2P-client slot and breaks the next session, so always fall back
+        to deleting the link directly.
+        """
+        self._cmd_ok(f"P2P_GROUP_REMOVE {ifname}")
+        path = f"/sys/class/net/{ifname}"
+        for _ in range(20):
+            if not os.path.exists(path):
+                return True
+            time.sleep(0.05)
+        # ip link del can be refused for P2P links; try nl80211 first.
+        for command in (["iw", "dev", ifname, "del"], ["ip", "link", "del", ifname]):
+            if not os.path.exists(path):
+                return True
+            result = subprocess.run(command, check=False, capture_output=True, text=True)
+            if result.returncode == 0:
+                LOG.info("removed %s with %s", ifname, " ".join(command))
+                return True
+            LOG.warning(
+                "%s failed: %s",
+                " ".join(command),
+                (result.stderr or result.stdout).strip(),
+            )
+        if os.path.exists(path):
+            LOG.error("could not remove P2P interface %s", ifname)
+            return False
+        return True
 
     # -- main loop ----------------------------------------------------------
 
