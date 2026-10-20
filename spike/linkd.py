@@ -383,7 +383,10 @@ class Linkd:
     def _configure_from_group(self, ifname: str, ip: str, prefix: int, peer_ip: str) -> None:
         # The GO's WPS credentials already carry the client address; use it
         # instead of DHCP so the RTSP connect starts before the phone's
-        # display session times out. The link itself is already up.
+        # display session times out. The supplicant creates the netdev down,
+        # so bring it up before adding the address (otherwise the route is
+        # linkdown and RTSP fails with EHOSTUNREACH).
+        self._link_up(ifname)
         self._ip_addr_replace(ifname, f"{ip}/{prefix}")
         self._log_interface_state(ifname)
         self.emitter.emit(
@@ -394,6 +397,16 @@ class Linkd:
             router=peer_ip,
             source="p2p",
         )
+
+    def _link_up(self, ifname: str) -> None:
+        result = subprocess.run(
+            ["ip", "link", "set", "dev", ifname, "up"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            LOG.warning("ip link set %s up failed: %s", ifname, result.stderr.strip())
 
     def _configure_address(self, ifname: str) -> str:
         # The group interface starts with no IPv4 address. A UDP socket bound
@@ -449,6 +462,13 @@ class Linkd:
         ):
             result = subprocess.run(command, check=False, capture_output=True, text=True)
             LOG.info("%s: %s", " ".join(command), result.stdout.strip() or "(empty)")
+        for attribute in ("operstate", "carrier"):
+            try:
+                with open(f"/sys/class/net/{ifname}/{attribute}", "r", encoding="ascii") as handle:
+                    value = handle.read().strip()
+            except OSError:
+                value = "?"
+            LOG.info("%s/%s: %s", ifname, attribute, value)
 
     def _on_wfd_event(self, name: str, data: dict) -> None:
         if name == "connected":
