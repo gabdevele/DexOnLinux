@@ -8,6 +8,7 @@ address, which creates the connected route to the phone).
 
 from __future__ import annotations
 
+import errno
 import logging
 import random
 import socket
@@ -25,6 +26,10 @@ REQUEST = 3
 ACK = 5
 
 BROADCAST = "255.255.255.255"
+# Android's P2P GO always uses 192.168.49.1/24. The limited broadcast has no
+# route on a freshly created group interface; this subnet broadcast does once
+# linkd seeds 192.168.49.2/24, and the GO's DHCP server listens on both.
+SUBNET_BROADCAST = "192.168.49.255"
 SERVER_PORT = 67
 CLIENT_PORT = 68
 
@@ -150,6 +155,18 @@ def _parse_reply(payload: bytes) -> _Reply:
     )
 
 
+def _send(sock: socket.socket, packet: bytes) -> None:
+    """Send a DHCP packet, working around the missing limited-broadcast route."""
+    try:
+        sock.sendto(packet, (BROADCAST, SERVER_PORT))
+        return
+    except OSError as exc:
+        if exc.errno != errno.ENETUNREACH:
+            raise
+        LOG.info("no route for %s; using %s", BROADCAST, SUBNET_BROADCAST)
+        sock.sendto(packet, (SUBNET_BROADCAST, SERVER_PORT))
+
+
 def _await(sock: socket.socket, xid: int, wanted_type: int, deadline: float) -> _Reply | None:
     while time.monotonic() < deadline:
         sock.settimeout(max(0.1, min(2.0, deadline - time.monotonic())))
@@ -187,7 +204,7 @@ def acquire(ifname: str, timeout: float = 12.0) -> Lease:
     try:
         while time.monotonic() < deadline and lease is None:
             try:
-                sock.sendto(_build_packet(xid, DISCOVER, mac), (BROADCAST, SERVER_PORT))
+                _send(sock, _build_packet(xid, DISCOVER, mac))
             except OSError as exc:
                 raise DhcpError(f"cannot send DHCPDISCOVER on {ifname}: {exc}") from exc
             LOG.info("DHCPDISCOVER on %s (xid %08x)", ifname, xid)
@@ -198,7 +215,10 @@ def acquire(ifname: str, timeout: float = 12.0) -> Lease:
 
             request = _build_packet(xid, REQUEST, mac, requested_ip=offer.ip, server_id=offer.server)
             for _ in range(3):
-                sock.sendto(request, (BROADCAST, SERVER_PORT))
+                try:
+                    _send(sock, request)
+                except OSError as exc:
+                    raise DhcpError(f"cannot send DHCPREQUEST on {ifname}: {exc}") from exc
                 ack = _await(sock, xid, ACK, deadline)
                 if ack is not None:
                     lease = Lease(
