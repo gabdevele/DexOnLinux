@@ -256,6 +256,47 @@ Outbound WFD SD requests are available as `P2P_SD_REQUEST <addr> wifi-display [s
   "using an external program to control the additional information exchanges in the messages",
   `wpa_supplicant/defconfig` WFD section). `[CONFIRMED-source]`
 
+### 2f. Errata from the live spike (2026-10-20)
+
+Tested on Ubuntu 24.04 / wpa_supplicant 2.10 / Intel AX201 and a Galaxy S24
+(SM-S921B, Android 16, One UI 8.0).
+
+- **`WFD_SUBELEM_SET all <hex>` alone does not advertise the sink.** The ctrl_iface
+  handler stores the subelements (`wifi_display_subelem_set` →
+  `wifi_display_subelem_set_from_ies`) but never sets `global->wifi_display`;
+  `wifi_display_update_wfd_ie()` takes the `!global->wifi_display` early-out and clears
+  every WFD IE. The phone therefore sees no sink even though the command returns `OK`.
+  The ctrl_iface fix is an explicit `SET wifi_display 1` before or after the
+  subelements. The D-Bus `WFDIEs` setter is self-contained: it calls
+  `wifi_display_enable(global, 1)` after `wifi_display_subelem_set_from_ies()`
+  (`wpas_dbus_setter_global_wfd_ies`), so a D-Bus implementation does not need the
+  extra step. This supersedes the "setting a non-empty value also enables Wi-Fi
+  Display" wording in §2d(a). `[CONFIRMED-runtime]`
+
+- **Samsung DeX uses WPS display PIN, not PBC.** After the sink is listed, the phone
+  sends a P2P provision-discovery request with the display method; wpa_supplicant emits
+  `P2P-PROV-DISC-SHOW-PIN <peer> <pin>` and the phone shows "Inserisci il PIN mostrato
+  su <sink>". Calling `P2P_CONNECT <mac> pbc go_intent=0` only after
+  `P2P-GO-NEG-REQUEST` is too late/wrong-method and the phone reports a failed
+  connection. The correct response is immediate:
+  `P2P_CONNECT <mac> <pin> display go_intent=0` (miraclecast's
+  `supplicant_event_p2p_prov_disc_show_pin` does the same). The PIN must be surfaced to
+  the user immediately; each attempt generates a new PIN. `[CONFIRMED-runtime]`
+
+- **Extended listen 200 ms / 1000 ms is too sparse** for the single provision-discovery
+  frame DeX sends. `P2P_EXT_LISTEN 1000 1000` (listen for the whole interval) made the
+  discovery/attempt reliable in the spike. `[CONFIRMED-runtime, small sample]`
+
+- **Stale "Connesso in precedenza" state on the phone.** After a failed PIN attempt the
+  DeX screen keeps the sink in its saved list; "Avvia ora" can fail immediately without
+  any frame reaching the laptop. Removing the saved Wi-Fi Direct device (or using a
+  fresh device entry) is required before the next attempt. The product must handle this
+  UX case. `[CONFIRMED-runtime]`
+
+- Still unvalidated at the time of writing: DHCP address assignment on the P2P
+  interface, the phone-side RTSP handshake (M1–M7), DeX streaming, and STA internet
+  during the session. The next live run covers those.
+
 ---
 
 ## 3. Driver concurrency evidence (STA + P2P-GO on one radio)

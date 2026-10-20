@@ -372,10 +372,13 @@ support (DHCP server), polkit/systemd packaging of the helper.
 ## 12. Open questions & spikes (before or during implementation)
 
 - **S1** WFD Device-Info bitmap variant Samsung accepts (0x0011 vs 0x0091 vs dual-role).
+  *0x0011 (primary sink + session available) is accepted for discovery on the S24; see §14.*
 - **S2** NM coexistence in practice: NM tolerates direct supplicant P2P ops + `p2p-*`
   group interface while STA stays connected (watch NM logs; verify STA quality/latency).
 - **S3** Phone IP discovery: DHCP lease vs `GroupStarted` addresses vs static fallback.
 - **S4** Invitation-flow specifics (persistent group join semantics on One UI 2026).
+  *The S24 used a fresh KEYPAD/display-PIN connect, not an invitation; stale saved-device
+  behavior remains to handle; see §14.*
 - **S5** If `dbus-next` is a problem: ctrl_iface-only implementation feasibility.
 - **S6** Volunteer hardware for mt792x/brcmfmac/ath/rtw89 verification.
 
@@ -384,3 +387,43 @@ support (DHCP server), polkit/systemd packaging of the helper.
 Internal module structure, listen duty-cycle parameters, DHCP client retry/backoff details,
 the exact video-formats string variants to attempt, logging format, test layout, and the
 `--transport` flag plumbing. Everything that changes *what is built* is decided above.
+
+## 14. Spike findings (2026-10-20, first live run)
+
+The throwaway spike on branch `spike/wfd-sink` validated discovery and the pairing flow
+against a Galaxy S24 (Android 16 / One UI 8) and an Intel AX201 on Ubuntu 24.04. It found
+corrections that change the implementation brief:
+
+1. **WFD must be explicitly enabled.** On the ctrl_iface path, `WFD_SUBELEM_SET all ...`
+   stores the IEs but does not set `global->wifi_display`, so
+   `wifi_display_update_wfd_ie()` discards them. Send `SET wifi_display 1` first. On the
+   D-Bus path, setting the global `WFDIEs` property already enables WFD; no extra step.
+   The helper must restore the previous `wifi_display` value on exit.
+2. **DeX pairs with a display PIN, not PBC.** The phone sends a P2P provision-discovery
+   request with the WPS display method; the sink must surface the generated PIN to the
+   user immediately and call `P2P_CONNECT <mac> <pin> display go_intent=0` in the
+   `P2P-PROV-DISC-SHOW-PIN` handler. Waiting for `P2P-GO-NEG-REQUEST` and calling PBC
+   fails. This adds a **PIN UI/notification requirement** to the product: the session
+   cannot be fully headless; the PIN must be shown within the WPS lifetime, and each
+   attempt generates a new PIN.
+3. **Continuous listen is required.** `P2P_EXT_LISTEN 200 1000` loses the single
+   provision-discovery frame; use `P2P_EXT_LISTEN 1000 1000` (or an equivalent
+   continuous listen) while waiting for the phone.
+4. **Stale phone-side device state is a UX case.** After a failed PIN attempt the phone
+   keeps "DexOnLinux — Connesso in precedenza"; "Avvia ora" may fail without sending a
+   frame. The product must offer a retry path and document forgetting the saved device.
+
+Impact on the design:
+
+- The `linkd` helper protocol gains a `pin_required` event (pin + peer) and sends
+  `P2P_CONNECT ... display` immediately; the runner/UI displays the PIN (desktop
+  notification + terminal in the spike; the shipped app should use a modal dialog).
+- The persisted state file must include the previous `wifi_display` and `device_name`
+  values (D12/D13): the spike restores the former but cannot query `device_name` over
+  ctrl_iface; the product should read it from `P2PDeviceConfig` (D-Bus) or the config.
+- The doctor must check the WFD *runtime* behavior, not just the binary strings: a
+  supplicant that accepts `WFD_SUBELEM_SET` but is not WFD-enabled is a silent failure.
+- S1 is answered for discovery: Device Info `0x0011` (primary sink + session available)
+  makes the S24 list the sink; `0x0091`/dual-role variants were not needed.
+- Still open: DHCP, RTSP M1–M7 with the phone, internet coexistence, role=GO case, and
+  invitation/persistent-group handling (S4).
