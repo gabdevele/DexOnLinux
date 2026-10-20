@@ -114,47 +114,42 @@ def test_group_started_uses_wps_address() -> None:
     print("PASS: group event supplies the WPS client address and GO address")
 
 
-def test_group_start_does_not_touch_the_link() -> None:
+def test_group_start_brings_up_a_down_link() -> None:
     linkd, _, emitter = make_linkd()
-    linkd._is_link_up = lambda ifname: True  # type: ignore[method-assign]
+    linkd._is_link_up = lambda ifname: False  # type: ignore[method-assign]
     linkd._has_address = lambda ifname, ip: True  # type: ignore[method-assign]
     linkd._log_interface_state = lambda ifname: None  # type: ignore[method-assign]
+    link_ups: list[str] = []
+
+    def record_link_up(ifname: str) -> None:
+        link_ups.append(ifname)
 
     def forbidden(*args: object) -> None:
-        raise AssertionError("group start must not change the link or address")
+        raise AssertionError("address is already configured; must not change it")
 
-    linkd._link_up = forbidden  # type: ignore[method-assign]
+    linkd._link_up = record_link_up  # type: ignore[method-assign]
     linkd._ip_addr_replace = forbidden  # type: ignore[method-assign]
     linkd._configure_from_group("p2p-test", "192.168.49.200", 24, "192.168.49.1")
-    assert emitter.events == [
-        (
-            "ip_acquired",
-            {
-                "ifname": "p2p-test",
-                "ip": "192.168.49.200",
-                "prefix": 24,
-                "router": "192.168.49.1",
-                "source": "p2p",
-            },
-        )
-    ], emitter.events
-    print("PASS: group start leaves the preconfigured link untouched")
+    assert link_ups == ["p2p-test"], link_ups
+    assert emitter.events[0][0] == "ip_acquired", emitter.events
+    print("PASS: group start brings up a link left down by the WPS cycle")
 
 
-def test_group_start_fails_without_preconfigured_address() -> None:
+def test_group_start_adds_a_missing_address() -> None:
     linkd, _, emitter = make_linkd()
     linkd._is_link_up = lambda ifname: True  # type: ignore[method-assign]
     linkd._has_address = lambda ifname, ip: False  # type: ignore[method-assign]
+    linkd._log_interface_state = lambda ifname: None  # type: ignore[method-assign]
+    addresses: list[tuple[str, str]] = []
 
-    def forbidden(*args: object) -> None:
-        raise AssertionError("must not change the address after group start")
+    def record_address(ifname: str, address: str) -> None:
+        addresses.append((ifname, address))
 
-    linkd._link_up = forbidden  # type: ignore[method-assign]
-    linkd._ip_addr_replace = forbidden  # type: ignore[method-assign]
+    linkd._ip_addr_replace = record_address  # type: ignore[method-assign]
     linkd._configure_from_group("p2p-test", "192.168.49.200", 24, "192.168.49.1")
-    code = emitter.events[0][1]["code"]
-    assert code == "address-not-preconfigured", emitter.events
-    print("PASS: missing preconfiguration fails without deauthing the group")
+    assert addresses == [("p2p-test", "192.168.49.200/24")], addresses
+    assert emitter.events[0][0] == "ip_acquired", emitter.events
+    print("PASS: group start adds the WPS address when preconfiguration missed")
 
 
 def test_cleanup_restores_wfd_and_go_intent() -> None:
@@ -181,8 +176,8 @@ def main() -> int:
         test_go_neg_with_pin_reuses_display_pin,
         test_pbc_request_starts_pbc_connect,
         test_group_started_uses_wps_address,
-        test_group_start_does_not_touch_the_link,
-        test_group_start_fails_without_preconfigured_address,
+        test_group_start_brings_up_a_down_link,
+        test_group_start_adds_a_missing_address,
         test_cleanup_restores_wfd_and_go_intent,
     ]
     for test in tests:
