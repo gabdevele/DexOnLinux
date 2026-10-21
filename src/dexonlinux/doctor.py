@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shutil
@@ -11,6 +12,8 @@ from pathlib import Path
 
 from dexonlinux.p2p.base import DEFAULT_P2P_FREQ
 from dexonlinux.system import CommandResult, Runner
+
+LOG = logging.getLogger(__name__)
 
 CTRL_DIR = Path("/run/wpa_supplicant")
 NET_DIR = Path("/sys/class/net")
@@ -135,6 +138,8 @@ def probe_stack(
     requested = freq if freq is not None else DEFAULT_P2P_FREQ
     phy = _wiphy(runner, interface)
     frequencies = _frequencies(runner, phy) if phy else []
+    if phy and not frequencies:
+        LOG.debug("could not parse any channel from 'iw phy %s info'; skipping the frequency check", phy)
     if frequencies and requested not in frequencies:
         suggestions = ", ".join(str(value) for value in frequencies[:_MAX_SUGGESTED_FREQUENCIES])
         reasons.append(

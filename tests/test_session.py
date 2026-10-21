@@ -135,19 +135,34 @@ def test_client_role_without_peer_ip_is_rejected():
     assert helper.stopped is True
 
 
-def test_old_helper_group_keys_are_rejected():
+def _capture_session_errors(monkeypatch):
+    messages = []
+
+    def capture(template, *args):
+        messages.append(template % args if args else template)
+
+    monkeypatch.setattr("dexonlinux.session.LOG.error", capture)
+    return messages
+
+
+def test_old_helper_group_keys_are_rejected(monkeypatch):
     # A helper from an older install emits client_ip/go_ip instead of
     # local_ip/peer_ip: the session must refuse it instead of unpacking junk.
+    messages = _capture_session_errors(monkeypatch)
     helper = FakeHelper(raw={"ifname": "p2p-test", "role": "client", "go_ip": "192.168.49.1"})
     hosts = []
     session = DexSession(helper, FakeScrcpy(), lambda host: hosts.append(host) or FakeSink())
     assert session.run() == 1
     assert hosts == []
     assert helper.stopped is True
+    assert any("peer address" in message for message in messages)
+    assert any("version mismatch" in message for message in messages)
 
 
-def test_unknown_helper_role_is_rejected():
+def test_unknown_helper_role_is_rejected(monkeypatch):
+    messages = _capture_session_errors(monkeypatch)
     helper = FakeHelper(raw={"ifname": "p2p-test", "role": "GO", "peer_ip": "192.168.49.2"})
     session = DexSession(helper, FakeScrcpy(), lambda host: FakeSink())
     assert session.run() == 1
     assert helper.stopped is True
+    assert any("'GO'" in message and "version mismatch" in message for message in messages)

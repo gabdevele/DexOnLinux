@@ -191,6 +191,18 @@ def test_parse_phy_frequencies_reads_only_usable_channels():
     assert parsed == [2412, 2437, 5180]
 
 
+def test_unparseable_channel_list_skips_the_check_with_a_note(tmp_path, monkeypatch):
+    notes = []
+    monkeypatch.setattr("dexonlinux.doctor.LOG.debug", lambda template, *args: notes.append(template % args))
+    (tmp_path / "p2p-dev-wlp0s20").touch()
+    outputs_map = outputs(frequencies=None)
+    outputs_map[("iw", "phy", "phy2", "info")] = "Frequencies:\n\t* 2402 - 2482 MHz (20.0 dBm)\n"
+    report = probe_stack(FakeRunner(outputs_map), "wlp0s20f3", ctrl_dir=tmp_path, which=which_all)
+
+    assert report.supported is True
+    assert any("frequency check" in note for note in notes)
+
+
 def test_list_p2p_interfaces_checks_the_phy_modes(tmp_path):
     (tmp_path / "wlp0s20f3").mkdir()
     (tmp_path / "wlp0s20f3" / "wireless").mkdir()

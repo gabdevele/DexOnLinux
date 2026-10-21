@@ -27,4 +27,4 @@ jobs:
         run: uv run --python ${{ matrix.python-version }} --only-group dev ruff check src tests
 
       - name: Pytest
-        run: uv run --python ${{ matrix.python-version }} --only-group dev pytest -q
+        run: uv run --python ${{ matrix.python-version }} --group dev pytest -q

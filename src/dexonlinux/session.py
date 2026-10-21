@@ -62,13 +62,19 @@ class DexSession:
         try:
             event = self._helper.wait_for("group_started", timeout=120.0)
             data = event.data
+            raw_role = data.get("role")
             try:
-                role = P2PRole(data.get("role"))
+                role = P2PRole(raw_role)
             except ValueError as exc:
-                raise P2PError("P2P group has an unknown role") from exc
+                raise P2PError(
+                    f"P2P group event has an unexpected role {raw_role!r} (helper/CLI version mismatch)"
+                ) from exc
             host = data.get("peer_ip")
             if not host:
-                raise P2PError(f"P2P group ({role.value}) has no peer address")
+                raise P2PError(
+                    f"P2P group ({role.value}) has no peer address "
+                    "(helper/CLI version mismatch; is the helper up to date?)"
+                )
             sink = self._sink_factory(str(host))
             self._sink = sink
             sink.on_event = self._on_sink_event

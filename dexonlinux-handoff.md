@@ -1,6 +1,7 @@
 # DexOnLinux - Handoff & Architecture Strategy Document
 
-> **Status update — 2026-10-21: implemented, live-accepted, cleaned up.**
+> **Status update — 2026-10-21: implemented and live-accepted on the v1.0.2
+> tree; the cleanup landed on top; the post-cleanup live re-run is pending.**
 > The plan below was executed in this workspace:
 > - `miraclecast` is gone; the product uses a modular Python direct backend
 >   (`src/dexonlinux/p2p/`) that talks to `wpa_supplicant` over the P2P
@@ -20,10 +21,15 @@
 > - `dexonlinux` drives the helper, the RTSP WFD handshake and scrcpy
 >   end-to-end; the DeX display is auto-selected (landscape 16:9).
 > - 100 unit tests, ruff (E,F,W,I,UP,B,SIM,C4,RET @ 120 cols) clean, pytest
->   configured, CI on Python 3.9/3.12; `python -m build` + `twine check` pass.
+>   configured; the CI workflow (Python 3.9/3.12) runs the same commands,
+>   verified locally; `python -m build` + `twine check` pass.
 > - The throwaway `spike/` tree is deleted; interaction, logging, models and P2P
 >   types live in focused modules.
-> - Evidence: `docs/research/2026-10-21-live-acceptance.md`.
+> - Live evidence (pre-cleanup tree): `docs/research/2026-10-21-live-acceptance.md`.
+>   Its helper `--p2p-go` flag and old `group_started` keys are historical: the
+>   CLI now passes `--role go --p2p-freq <MHz>`. Re-run `dexonlinux --doctor`
+>   and one phone session on this tree before release; that re-run is the
+>   remaining release gate.
 >
 > Remaining ideas from section 3 that are still open: `rich`-based UI, polkit
 > instead of sudo stdin, wireless ADB, broader chipset matrix.
