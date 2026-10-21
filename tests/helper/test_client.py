@@ -35,3 +35,15 @@ def test_client_raises_on_helper_error_event():
             client.wait_for("ready", timeout=2)
     finally:
         client.stop()
+
+
+def test_client_reports_an_early_helper_exit():
+    client = HelperClient.start(
+        "wlp-test",
+        command=[sys.executable, "-c", "raise SystemExit(7)"],
+    )
+    try:
+        with pytest.raises(P2PError, match="exited with code 7"):
+            client.wait_for("ready", timeout=2)
+    finally:
+        client.stop()

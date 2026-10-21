@@ -163,14 +163,14 @@ def confirm_session(report: StackReport, skip: bool) -> None:
         raise CommandError("Aborted before starting the session.")
 
 
-def prepare_sudo() -> SubprocessRunner:
+def prepare_sudo() -> tuple[SubprocessRunner, str]:
     try:
         password = getpass.getpass(f"[sudo] password for {getpass.getuser()}: ")
     except (EOFError, KeyboardInterrupt) as exc:
         raise CommandError("sudo authentication is required to start the P2P helper.") from exc
     runner = SubprocessRunner(password)
     runner.ensure_sudo()
-    return runner
+    return runner, password
 
 
 def run(args: argparse.Namespace) -> int:
@@ -190,13 +190,14 @@ def run(args: argparse.Namespace) -> int:
 
     device = choose_adb_device(Device(runner), args.device)
     confirm_session(report, args.yes)
-    prepare_sudo()
+    _, sudo_password = prepare_sudo()
 
     logger.info("Starting Wi-Fi Direct P2P on %s.", interface)
     helper = HelperClient.start(
         interface,
         backend="direct",
         suspend_nm=report.suspend_nm,
+        sudo_password=sudo_password,
     )
     try:
         scrcpy = ScrcpySession(

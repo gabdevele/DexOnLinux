@@ -47,25 +47,33 @@ class HelperClient:
         backend: str = "direct",
         command: Sequence[str] | None = None,
         suspend_nm: bool = False,
+        sudo_password: str | None = None,
     ) -> HelperClient:
+        provided_command = command is not None
         if command is None:
             executable = shutil.which("dexonlinux-linkd")
             if executable:
-                command = ["sudo", "-n", executable]
+                command = [executable]
             else:
-                command = ["sudo", "-n", sys.executable, "-m", "dexonlinux.helper"]
-            command = [*command, "--interface", interface, "--backend", backend]
+                command = [sys.executable, "-m", "dexonlinux.helper"]
+            sudo = ["sudo", "-S", "-p", ""] if sudo_password is not None else ["sudo", "-n"]
+            command = [*sudo, *command, "--interface", interface, "--backend", backend]
             if suspend_nm:
                 command.append("--suspend-nm")
 
         process = subprocess.Popen(
             list(command),
+            stdin=subprocess.PIPE if sudo_password is not None and not provided_command else None,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
             start_new_session=True,
         )
+        if process.stdin is not None and sudo_password is not None:
+            process.stdin.write(f"{sudo_password}\n")
+            process.stdin.flush()
+            process.stdin.close()
         events: queue.Queue[HelperEvent] = queue.Queue()
         stdout_thread = threading.Thread(
             target=_read_stdout,
@@ -84,6 +92,10 @@ class HelperClient:
     def wait_for(self, kind: str, timeout: float) -> HelperEvent:
         deadline = _now() + timeout
         while True:
+            if self.process.poll() is not None and self._events.empty():
+                raise P2PError(
+                    f"helper exited with code {self.process.returncode} before emitting {kind!r}"
+                )
             remaining = deadline - _now()
             if remaining <= 0:
                 raise P2PError(f"helper did not emit {kind!r} within {timeout:.1f}s")
@@ -95,6 +107,14 @@ class HelperClient:
                 return event
             if event.kind == "error":
                 raise P2PError(str(event.data.get("message", "helper error")))
+            if event.kind == "_closed":
+                code = self.process.poll()
+                if code is None:
+                    try:
+                        code = self.process.wait(timeout=0.5)
+                    except subprocess.TimeoutExpired:
+                        code = None
+                raise P2PError(f"helper exited with code {code} before emitting {kind!r}")
 
     def stop(self) -> None:
         if self.process.poll() is None:
@@ -134,6 +154,7 @@ def _read_stdout(stream, events: queue.Queue[HelperEvent]) -> None:
             events.put(HelperEvent(kind, data))
     finally:
         stream.close()
+        events.put(HelperEvent("_closed", {}))
 
 
 def _read_stderr(stream) -> None:
