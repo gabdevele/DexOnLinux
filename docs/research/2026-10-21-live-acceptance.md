@@ -81,9 +81,9 @@ After closing scrcpy and stopping the helper with `Ctrl-C`:
 - No `p2p-*` group interface
 - No new iwlwifi firmware errors
 
-## Product CLI acceptance (pending)
+## Product CLI acceptance (passed)
 
-The helper path above passed. The user-facing `dexonlinux --doctor` reports:
+The user-facing `dexonlinux --doctor` reports:
 
 ```text
 Interface: wlp0s20f3
@@ -93,7 +93,37 @@ Pause NetworkManager: yes
 Supported: yes
 ```
 
-The CLI now starts the helper with `--p2p-go`, uses the GO peer address for the
-RTSP client, and starts scrcpy when streaming begins. The full `dexonlinux` CLI
-run (ADB selection, scrcpy display selection, close scrcpy, repeat twice) still
-needs to be executed on the live host.
+Running `.venv/bin/dexonlinux --debug --log-file /tmp/opencode/dexonlinux-cli.log`
+completed the whole product flow:
+
+- sudo password read on stdin, helper started with `--p2p-go` and `--suspend-nm`
+- P2P GO group `p2p-wlp0s20-2` on 2437 MHz, `192.168.49.1/24`, DHCP lease
+  `192.168.49.2` for the phone
+- RTSP client reached `rtsp://192.168.49.2/wfd1.0/streamid=0`, `SETUP` accepted,
+  `PLAY` accepted, `streaming`
+- scrcpy opened the DeX display; the DeX display id changed between runs
+  (17, then 19), so the CLI now lists displays and auto-selects the unique
+  landscape 16:9 one; an explicit `--display-id` that no longer exists falls
+  back to the same selection instead of failing
+- closing the scrcpy window ended the session; the helper removed the group
+  (`P2P-GROUP-REMOVED ... GO reason=REQUESTED`), the DHCP server stopped and
+  NetworkManager was resumed
+- after the CLI exited: NetworkManager state `S`, no `p2p-*` interface,
+  `ping -c 2 1.1.1.1` 0% loss, no new iwlwifi firmware errors
+
+### Close-time `EBADF` message
+
+The first CLI runs logged:
+
+```text
+[INFO] (dexonlinux.wfd.rtsp) - RTSP session ended: [Errno 9] Bad file descriptor
+```
+
+This was a benign stop/read race: `WfdSink.stop()` closed the RTSP socket from
+the scrcpy monitor thread while the RTSP reader was blocked in `recv()`, so the
+reader observed `EBADF`. `stop()` now only sets its stop flag and lets the
+reader exit on its next 1 s read timeout; the session end is logged at `debug`
+level when the stop was requested by us and at `info` level when the phone or
+the network really dropped the connection. The socket itself is still closed by
+the reader in `_cleanup()`. Covered by
+`tests/wfd/test_rtsp.py::test_stop_closes_the_session_without_a_socket_race`.
