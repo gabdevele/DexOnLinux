@@ -1,4 +1,4 @@
-"""Direct wpa_supplicant P2P client backend."""
+"""Direct wpa_supplicant P2P backend."""
 
 from __future__ import annotations
 
@@ -8,30 +8,40 @@ import time
 from collections.abc import Callable
 from dataclasses import replace
 
-from dexonlinux.p2p.base import GroupInfo, P2PError, P2PRole
+from dexonlinux.p2p.base import DEFAULT_P2P_FREQ, GO_NETWORK, GroupInfo, GroupNetwork, P2PError, P2PRole
+from dexonlinux.p2p.dhcp import DhcpServer
 from dexonlinux.p2p.events import EventKind, parse_event
+from dexonlinux.p2p.link import LinkConfigurator
+from dexonlinux.p2p.supplicant import SupplicantControl
+from dexonlinux.p2p.wfd import WfdConfigurator
 
 LOG = logging.getLogger(__name__)
+
+CONNECT_TIMEOUT = 90.0
+_RETRY_WINDOW = 60.0  # ignore duplicate GO negotiation requests for this long
 
 
 class DirectBackend:
     def __init__(
         self,
-        interface,
-        ctrl,
-        wfd,
-        link,
-        frequency: int = 2437,
-        go_intent: int = 0,
-        dhcp=None,
+        interface: str,
+        ctrl: SupplicantControl,
+        wfd: WfdConfigurator,
+        link: LinkConfigurator,
+        *,
+        role: P2PRole = P2PRole.CLIENT,
+        network: GroupNetwork = GO_NETWORK,
+        frequency: int = DEFAULT_P2P_FREQ,
+        dhcp: DhcpServer | None = None,
         before_group: Callable[[], None] | None = None,
     ) -> None:
         self.interface = interface
         self._ctrl = ctrl
         self._wfd = wfd
         self._link = link
+        self._role = role
+        self._network = network
         self._frequency = frequency
-        self._go_intent = go_intent
         self._dhcp = dhcp
         self._before_group = before_group
         self._before_group_done = False
@@ -48,7 +58,7 @@ class DirectBackend:
         self._ctrl.command("P2P_EXT_LISTEN 1000 1000")
         LOG.info("advertising as a WFD sink on %s", self.interface)
 
-    def connect(self, stop: threading.Event, timeout: float = 90.0) -> GroupInfo:
+    def connect(self, stop: threading.Event, timeout: float = CONNECT_TIMEOUT) -> GroupInfo:
         deadline = time.monotonic() + timeout
         while not stop.is_set() and time.monotonic() < deadline:
             for line in self._ctrl.pump(0.5):
@@ -92,20 +102,25 @@ class DirectBackend:
             raise P2PError("malformed P2P group event")
         self.group_ifname = group.ifname
         self._pending_until = 0.0
+
         if group.role is P2PRole.GO:
-            if self._go_intent == 0:
-                raise P2PError("phone negotiated the laptop as GO; client role required")
-            local_ip = group.local_ip or "192.168.49.1"
-            prefix = group.local_prefix if group.local_ip else 24
+            if self._role is not P2PRole.GO:
+                raise P2PError("phone negotiated the laptop as GO; client role was requested")
+            if self._dhcp is None:
+                raise P2PError("laptop is the GO but no DHCP server is configured")
+            local_ip = group.local_ip or self._network.server_ip
+            prefix = group.local_prefix if group.local_ip else self._network.prefix
             self._link.configure(group.ifname, f"{local_ip}/{prefix}")
-            peer_ip = "192.168.49.2"
-            if self._dhcp is not None:
-                self._dhcp.start(group.ifname)
-                peer_ip = self._dhcp.peer_ip
-            LOG.info("P2P GO %s up with %s/%d, peer lease %s", group.ifname, local_ip, prefix, peer_ip)
-            return replace(group, local_ip=local_ip, peer_ip=peer_ip)
+            self._dhcp.start(group.ifname)
+            LOG.info("P2P GO %s up with %s/%d, peer lease %s", group.ifname, local_ip, prefix, self._dhcp.peer_ip)
+            return replace(group, local_ip=local_ip, peer_ip=self._dhcp.peer_ip)
+
+        if self._role is P2PRole.GO:
+            raise P2PError("phone negotiated the laptop as client; GO role was requested")
         if not group.local_ip:
-            raise P2PError("group started without a WPS client address; DHCP fallback is not implemented in v1")
+            raise P2PError("group started without a WPS client address")
+        if not group.peer_ip:
+            raise P2PError("group started without the GO address")
         self._link.configure(group.ifname, f"{group.local_ip}/{group.local_prefix}")
         LOG.info("P2P group %s up with %s/%d", group.ifname, group.local_ip, group.local_prefix)
         return group
@@ -121,8 +136,8 @@ class DirectBackend:
             self._before_group()
             self._before_group_done = True
         self._pending_peer = mac
-        self._pending_until = time.monotonic() + 60.0
-        self._ctrl.command(f"P2P_CONNECT {mac} pbc freq={self._frequency} go_intent={self._go_intent}")
+        self._pending_until = time.monotonic() + _RETRY_WINDOW
+        self._ctrl.command(f"P2P_CONNECT {mac} pbc freq={self._frequency} go_intent={self._role.go_intent}")
 
     def _start_preup(self) -> None:
         if self._preup_started:

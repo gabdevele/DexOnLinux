@@ -3,21 +3,36 @@ from pathlib import Path
 
 import pytest
 
-from dexonlinux.helper.client import HelperClient, _helper_command
-from dexonlinux.p2p.base import P2PError
+from dexonlinux.helper.client import HelperClient, build_helper_command
+from dexonlinux.p2p.base import P2PError, P2PRole
 
 
-def test_helper_command_uses_go_and_suspend_flags():
-    command = _helper_command("wlp-test", "direct", suspend_nm=True, p2p_go=True, sudo_password="x")
+def test_build_helper_command_uses_role_frequency_and_suspend(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda _name: "/usr/local/bin/dexonlinux-linkd")
+    command = build_helper_command("wlp-test", role=P2PRole.GO, frequency=2412, suspend_nm=True, sudo_password="x")
     assert command[:3] == ["sudo", "-S", "-p"]
-    assert command[-2:] == ["--suspend-nm", "--p2p-go"]
-    assert "--interface" in command and "wlp-test" in command
+    assert "dexonlinux.helper" in command
+    assert "/usr/local/bin/dexonlinux-linkd" not in command
+    assert command[command.index("--role") + 1] == "go"
+    assert command[command.index("--p2p-freq") + 1] == "2412"
+    assert command[-1] == "--suspend-nm"
+
+
+def test_build_helper_command_without_password_uses_non_interactive_sudo():
+    command = build_helper_command(
+        "wlp-test",
+        role=P2PRole.CLIENT,
+        frequency=2437,
+        suspend_nm=False,
+        sudo_password=None,
+    )
+    assert command[:2] == ["sudo", "-n"]
+    assert "--suspend-nm" not in command
 
 
 def test_client_reads_events_and_stops():
     client = HelperClient.start(
         "wlp-test",
-        backend="direct",
         command=[sys.executable, str(Path(__file__).with_name("fake_helper.py"))],
     )
     try:

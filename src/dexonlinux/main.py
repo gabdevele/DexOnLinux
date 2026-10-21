@@ -20,7 +20,7 @@ from dexonlinux.device import Device
 from dexonlinux.doctor import StackReport, list_p2p_interfaces, probe_stack
 from dexonlinux.helper.client import HelperClient
 from dexonlinux.log import setup_logging
-from dexonlinux.p2p.base import P2PError
+from dexonlinux.p2p.base import P2PError, P2PRole
 from dexonlinux.scrcpy import ScrcpySession
 from dexonlinux.session import DexSession
 from dexonlinux.system import CommandError, SubprocessRunner
@@ -195,9 +195,8 @@ def run(args: argparse.Namespace) -> int:
     LOG.info("Starting Wi-Fi Direct P2P on %s.", interface)
     helper = HelperClient.start(
         interface,
-        backend="direct",
+        role=P2PRole.GO,
         suspend_nm=report.suspend_nm,
-        p2p_go=True,
         sudo_password=sudo_password,
     )
     try:

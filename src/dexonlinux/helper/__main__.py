@@ -12,7 +12,7 @@ from dataclasses import asdict
 from typing import Callable
 
 from dexonlinux.nm import NetworkManagerSuspension
-from dexonlinux.p2p.base import GroupInfo, P2PError
+from dexonlinux.p2p.base import DEFAULT_P2P_FREQ, GroupInfo, P2PError, P2PRole
 from dexonlinux.p2p.dhcp import DhcpServer
 from dexonlinux.p2p.direct import DirectBackend
 from dexonlinux.p2p.events import EventKind, parse_event
@@ -77,11 +77,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="DexOnLinux privileged P2P helper")
     parser.add_argument("--interface", required=True)
     parser.add_argument("--backend", choices=["direct"], default="direct")
-    parser.add_argument("--p2p-freq", type=int, default=2437)
     parser.add_argument(
-        "--p2p-go",
-        action="store_true",
-        help="offer the laptop as P2P GO instead of joining the phone's group",
+        "--role",
+        choices=[role.value for role in P2PRole],
+        default=P2PRole.GO.value,
+        help="requested P2P role: go is the product path, client is for diagnostics",
+    )
+    parser.add_argument(
+        "--p2p-freq",
+        type=int,
+        default=DEFAULT_P2P_FREQ,
+        help=f"P2P operating frequency in MHz (default: {DEFAULT_P2P_FREQ}, channel 6)",
     )
     parser.add_argument(
         "--suspend-nm",
@@ -101,17 +107,17 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGTERM, handle_signal)
 
     try:
+        role = P2PRole(args.role)
         ctrl = SupplicantControl(find_ctrl_socket(args.interface))
         suspension = NetworkManagerSuspension(args.suspend_nm)
-        go_intent = 15 if args.p2p_go else 0
         backend = DirectBackend(
             args.interface,
             ctrl,
-            WfdConfigurator(go_intent=go_intent),
+            WfdConfigurator(go_intent=role.go_intent),
             LinkConfigurator(SubprocessRunner()),
+            role=role,
             frequency=args.p2p_freq,
-            go_intent=go_intent,
-            dhcp=DhcpServer() if args.p2p_go else None,
+            dhcp=DhcpServer() if role is P2PRole.GO else None,
             before_group=suspension.suspend,
         )
     except (SupplicantError, CommandError) as exc:

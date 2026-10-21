@@ -17,7 +17,7 @@ class P2PRole(str, Enum):
     """
 
     CLIENT = "client"
-    GO = "GO"
+    GO = "go"
 
     @property
     def go_intent(self) -> int:

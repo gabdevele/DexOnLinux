@@ -2,7 +2,7 @@ import threading
 
 import pytest
 
-from dexonlinux.p2p.base import P2PError
+from dexonlinux.p2p.base import GroupNetwork, P2PError, P2PRole
 from dexonlinux.p2p.direct import DirectBackend
 
 
@@ -66,6 +66,19 @@ class FakeLink:
         self.watcher_stopped = True
 
 
+class FakeDhcp:
+    def __init__(self, peer_ip="192.168.49.2"):
+        self.started = []
+        self.stopped = False
+        self.peer_ip = peer_ip
+
+    def start(self, interface):
+        self.started.append(interface)
+
+    def stop(self):
+        self.stopped = True
+
+
 def group_event(role="client", client_ip="192.168.49.200"):
     address = f"ip_addr={client_ip} ip_mask=255.255.255.0 " if client_ip else ""
     return (
@@ -103,7 +116,7 @@ def test_pbc_request_starts_client_connect_and_returns_group():
     assert link.watcher_started is True
     assert "P2P_CONNECT ce:f9:f0:2b:8a:cc pbc freq=2437 go_intent=0" in ctrl.commands
     assert link.configured == [("p2p-wlp0s20-7", "192.168.49.200/24")]
-    assert group.role == "client"
+    assert group.role is P2PRole.CLIENT
     assert group.peer_ip == "192.168.49.1"
 
 
@@ -146,26 +159,33 @@ def test_before_group_hook_runs_once_before_p2p_connect():
     assert ctrl.commands[0].startswith("P2P_CONNECT aa:bb:cc:dd:ee:01")
 
 
-def test_go_role_is_rejected():
+def test_connect_uses_the_configured_frequency():
+    ctrl = FakeCtrl()
+    backend = DirectBackend("wlp0s20f3", ctrl, FakeWfd(), FakeLink(), frequency=2412)
+    backend._send_connect("aa:bb:cc:dd:ee:01")
+    assert "freq=2412" in ctrl.commands[0]
+
+
+def test_go_group_is_rejected_when_client_role_was_requested():
     backend = DirectBackend("wlp0s20f3", FakeCtrl(events=[group_event(role="GO")]), FakeWfd(), FakeLink())
-    with pytest.raises(P2PError, match="client"):
+    with pytest.raises(P2PError, match="client role"):
         backend.connect(stop=threading.Event(), timeout=1.0)
 
 
-class FakeDhcp:
-    def __init__(self):
-        self.started = []
-        self.stopped = False
-        self.peer_ip = "192.168.49.2"
+def test_client_group_is_rejected_when_go_role_was_requested():
+    backend = DirectBackend(
+        "wlp0s20f3",
+        FakeCtrl(events=[group_event()]),
+        FakeWfd(),
+        FakeLink(),
+        role=P2PRole.GO,
+        dhcp=FakeDhcp(),
+    )
+    with pytest.raises(P2PError, match="GO role"):
+        backend.connect(stop=threading.Event(), timeout=1.0)
 
-    def start(self, interface):
-        self.started.append(interface)
 
-    def stop(self):
-        self.stopped = True
-
-
-def test_go_role_is_accepted_when_requested():
+def test_go_role_uses_the_go_network_and_dhcp():
     ctrl = FakeCtrl(
         events=[
             "P2P-PROV-DISC-PBC-REQ ce:f9:f0:2b:8a:cc",
@@ -173,18 +193,39 @@ def test_go_role_is_accepted_when_requested():
                 "P2P-GO-NEG-SUCCESS role=GO freq=2437 peer_dev=ce:f9:f0:2b:8a:cc "
                 "peer_iface=ce:f9:f0:2b:0a:cc wps_method=PBC"
             ),
-            group_event(role="GO", client_ip="192.168.49.1"),
+            group_event(role="GO", client_ip=""),
         ]
     )
     link = FakeLink()
-    dhcp = FakeDhcp()
-    backend = DirectBackend("wlp0s20f3", ctrl, FakeWfd(), link, go_intent=15, dhcp=dhcp)
+    dhcp = FakeDhcp(peer_ip="10.13.37.2")
+    backend = DirectBackend(
+        "wlp0s20f3",
+        ctrl,
+        FakeWfd(),
+        link,
+        role=P2PRole.GO,
+        network=GroupNetwork("10.13.37.1", "10.13.37.2", 24),
+        dhcp=dhcp,
+    )
     group = backend.connect(stop=threading.Event(), timeout=1.0)
-    assert group.role == "GO"
-    assert group.peer_ip == "192.168.49.2"
+    assert group.role is P2PRole.GO
+    assert group.local_ip == "10.13.37.1"
+    assert group.peer_ip == "10.13.37.2"
     assert "P2P_CONNECT ce:f9:f0:2b:8a:cc pbc freq=2437 go_intent=15" in ctrl.commands
-    assert link.configured == [("p2p-wlp0s20-7", "192.168.49.1/24")]
+    assert link.configured == [("p2p-wlp0s20-7", "10.13.37.1/24")]
     assert dhcp.started == ["p2p-wlp0s20-7"]
+
+
+def test_go_role_without_dhcp_server_fails():
+    backend = DirectBackend(
+        "wlp0s20f3",
+        FakeCtrl(events=[group_event(role="GO")]),
+        FakeWfd(),
+        FakeLink(),
+        role=P2PRole.GO,
+    )
+    with pytest.raises(P2PError, match="DHCP"):
+        backend.connect(stop=threading.Event(), timeout=1.0)
 
 
 def test_pin_request_is_rejected_with_actionable_message():

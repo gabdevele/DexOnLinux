@@ -7,7 +7,6 @@ import json
 import logging
 import os
 import queue
-import shutil
 import signal
 import subprocess
 import sys
@@ -15,8 +14,9 @@ import threading
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import IO
 
-from dexonlinux.p2p.base import P2PError
+from dexonlinux.p2p.base import DEFAULT_P2P_FREQ, P2PError, P2PRole
 
 LOG = logging.getLogger(__name__)
 _MAX_EVENT = 64 * 1024
@@ -45,15 +45,22 @@ class HelperClient:
     def start(
         cls,
         interface: str,
-        backend: str = "direct",
-        command: Sequence[str] | None = None,
+        *,
+        role: P2PRole = P2PRole.GO,
+        frequency: int = DEFAULT_P2P_FREQ,
         suspend_nm: bool = False,
-        p2p_go: bool = False,
         sudo_password: str | None = None,
+        command: Sequence[str] | None = None,
     ) -> HelperClient:
         provided_command = command is not None
         if command is None:
-            command = _helper_command(interface, backend, suspend_nm, p2p_go, sudo_password)
+            command = build_helper_command(
+                interface,
+                role=role,
+                frequency=frequency,
+                suspend_nm=suspend_nm,
+                sudo_password=sudo_password,
+            )
 
         process = subprocess.Popen(
             list(command),
@@ -125,25 +132,39 @@ class HelperClient:
             if stream is not None:
                 stream.close()
 
-def _helper_command(
+
+def build_helper_command(
     interface: str,
-    backend: str,
+    *,
+    role: P2PRole,
+    frequency: int,
     suspend_nm: bool,
-    p2p_go: bool,
     sudo_password: str | None,
 ) -> list[str]:
-    executable = shutil.which("dexonlinux-linkd")
-    command = [executable] if executable else [sys.executable, "-m", "dexonlinux.helper"]
-    sudo = ["sudo", "-S", "-p", ""] if sudo_password is not None else ["sudo", "-n"]
-    command = [*sudo, *command, "--interface", interface, "--backend", backend]
+    """Build the privileged helper command for this package.
+
+    The helper always runs from the current interpreter. Picking a
+    ``dexonlinux-linkd`` executable from PATH could silently pair the CLI
+    with a different version of the JSON protocol.
+    """
+    command = [
+        sys.executable,
+        "-m",
+        "dexonlinux.helper",
+        "--interface",
+        interface,
+        "--role",
+        role.value,
+        "--p2p-freq",
+        str(frequency),
+    ]
     if suspend_nm:
         command.append("--suspend-nm")
-    if p2p_go:
-        command.append("--p2p-go")
-    return command
+    sudo = ["sudo", "-S", "-p", ""] if sudo_password is not None else ["sudo", "-n"]
+    return [*sudo, *command]
 
 
-def _read_stdout(stream, events: queue.Queue[HelperEvent]) -> None:
+def _read_stdout(stream: IO[str] | None, events: queue.Queue[HelperEvent]) -> None:
     if stream is None:
         return
     try:
@@ -169,7 +190,7 @@ def _read_stdout(stream, events: queue.Queue[HelperEvent]) -> None:
         events.put(HelperEvent("_closed", {}))
 
 
-def _read_stderr(stream) -> None:
+def _read_stderr(stream: IO[str] | None) -> None:
     if stream is None:
         return
     try:

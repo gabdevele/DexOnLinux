@@ -6,7 +6,7 @@ import logging
 import threading
 from typing import Callable
 
-from dexonlinux.p2p.base import P2PError
+from dexonlinux.p2p.base import P2PError, P2PRole
 
 LOG = logging.getLogger(__name__)
 SinkFactory = Callable[[str], object]
@@ -34,17 +34,13 @@ class DexSession:
         try:
             event = self._helper.wait_for("group_started", timeout=120.0)
             data = event.data
-            role = data.get("role")
-            if role == "client":
-                host = data.get("peer_ip")
-                if not host:
-                    raise P2PError("P2P group has no GO address")
-            elif role == "GO":
-                host = data.get("peer_ip")
-                if not host:
-                    raise P2PError("P2P GO group has no peer address")
-            else:
-                raise P2PError("P2P group has an unknown role")
+            try:
+                role = P2PRole(data.get("role"))
+            except ValueError as exc:
+                raise P2PError("P2P group has an unknown role") from exc
+            host = data.get("peer_ip")
+            if not host:
+                raise P2PError(f"P2P group ({role.value}) has no peer address")
             sink = self._sink_factory(str(host))
             self._sink = sink
             sink.on_event = self._on_sink_event

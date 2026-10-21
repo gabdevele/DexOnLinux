@@ -112,14 +112,14 @@ def test_scrcpy_exit_stops_the_sink():
 
 
 def test_go_role_without_peer_ip_is_rejected():
-    helper = FakeHelper(group_info(role="GO", peer_ip=None))
+    helper = FakeHelper(group_info(role="go", peer_ip=None))
     session = DexSession(helper, FakeScrcpy(), lambda host: FakeSink())
     assert session.run() == 1
     assert helper.stopped is True
 
 
 def test_go_role_uses_peer_ip_for_rtsp():
-    helper = FakeHelper(group_info(role="GO", local_ip="192.168.49.1", peer_ip="192.168.49.2"))
+    helper = FakeHelper(group_info(role="go", local_ip="192.168.49.1", peer_ip="192.168.49.2"))
     hosts = []
     session = DexSession(helper, FakeScrcpy(), lambda host: hosts.append(host) or FakeSink(), start_delay=0)
     assert session.run() == 0
