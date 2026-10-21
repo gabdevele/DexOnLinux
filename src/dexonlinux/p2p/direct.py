@@ -26,6 +26,7 @@ class DirectBackend:
 
     def prepare(self) -> None:
         self._ctrl.open()
+        self._link.remove_stale()
         self._state = self._wfd.apply(self._ctrl)
         self._ctrl.command("P2P_EXT_LISTEN 1000 1000")
         LOG.info("advertising as a WFD sink on %s", self.interface)
@@ -87,6 +88,9 @@ class DirectBackend:
         self._pending_peer = mac
         self._pending_until = time.monotonic() + 60.0
         self._ctrl.command(f"P2P_CONNECT {mac} pbc freq={self._frequency} go_intent=0")
+        # The group netdev appears during GO negotiation. Set it up now;
+        # doing so after association makes iwlwifi deauthenticate the client.
+        self._link.start_watcher()
 
     def _connect_pending(self) -> bool:
         return time.monotonic() < self._pending_until
@@ -94,6 +98,7 @@ class DirectBackend:
     def close(self) -> None:
         group = self.group_ifname
         try:
+            self._link.stop_watcher()
             if group:
                 self._ctrl.command(f"P2P_GROUP_REMOVE {group}")
                 try:

@@ -46,12 +46,24 @@ class FakeLink:
     def __init__(self):
         self.configured = []
         self.removed = []
+        self.stale_removed = False
+        self.watcher_started = False
+        self.watcher_stopped = False
 
     def configure(self, ifname, cidr):
         self.configured.append((ifname, cidr))
 
     def remove(self, ifname):
         self.removed.append(ifname)
+
+    def remove_stale(self):
+        self.stale_removed = True
+
+    def start_watcher(self):
+        self.watcher_started = True
+
+    def stop_watcher(self):
+        self.watcher_stopped = True
 
 
 def group_event(role="client", client_ip="192.168.49.200"):
@@ -65,10 +77,12 @@ def group_event(role="client", client_ip="192.168.49.200"):
 def test_prepare_opens_and_advertises():
     ctrl = FakeCtrl()
     wfd = FakeWfd()
-    backend = DirectBackend("wlp0s20f3", ctrl, wfd, FakeLink())
+    link = FakeLink()
+    backend = DirectBackend("wlp0s20f3", ctrl, wfd, link)
     backend.prepare()
     assert ctrl.opened is True
     assert wfd.applied is True
+    assert link.stale_removed is True
     assert "P2P_EXT_LISTEN 1000 1000" in ctrl.commands
 
 
@@ -82,6 +96,7 @@ def test_pbc_request_starts_client_connect_and_returns_group():
     link = FakeLink()
     backend = DirectBackend("wlp0s20f3", ctrl, FakeWfd(), link)
     group = backend.connect(stop=threading.Event(), timeout=1.0)
+    assert link.watcher_started is True
     assert "P2P_CONNECT ce:f9:f0:2b:8a:cc pbc freq=2437 go_intent=0" in ctrl.commands
     assert link.configured == [("p2p-wlp0s20-7", "192.168.49.200/24")]
     assert group.role == "client"
@@ -137,5 +152,6 @@ def test_close_removes_group_and_restores_supplicant():
     backend.close()
     assert "P2P_GROUP_REMOVE p2p-wlp0s20-7" in ctrl.commands
     assert link.removed == ["p2p-wlp0s20-7"]
+    assert link.watcher_stopped is True
     assert wfd.restored is True
     assert ctrl.closed is True
