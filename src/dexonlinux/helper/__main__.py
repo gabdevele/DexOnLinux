@@ -1,0 +1,107 @@
+"""Privileged helper: owns the supplicant ctrl socket and the P2P group."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import signal
+import sys
+import threading
+from dataclasses import asdict
+from typing import Callable
+
+from dexonlinux.p2p.base import GroupInfo, P2PError
+from dexonlinux.p2p.direct import DirectBackend
+from dexonlinux.p2p.events import EventKind, parse_event
+from dexonlinux.p2p.link import LinkConfigurator
+from dexonlinux.p2p.supplicant import (
+    SupplicantControl,
+    SupplicantError,
+    find_ctrl_socket,
+)
+from dexonlinux.p2p.wfd import WfdConfigurator
+from dexonlinux.system import CommandError, SubprocessRunner
+
+LOG = logging.getLogger(__name__)
+Emitter = Callable[[str, dict[str, object]], None]
+
+
+def emit(event: str, data: dict[str, object]) -> None:
+    print(json.dumps({"event": event, "data": data}, separators=(",", ":")), flush=True)
+
+
+def serve(
+    backend,
+    ctrl: SupplicantControl,
+    stop: threading.Event,
+    emitter: Emitter,
+    backend_name: str,
+    interface: str,
+) -> int:
+    try:
+        backend.prepare()
+        emitter(
+            "ready",
+            {"backend": backend_name, "interface": interface, "ctrl": str(ctrl.path)},
+        )
+        group: GroupInfo = backend.connect(stop)
+        emitter("group_started", asdict(group))
+        while not stop.is_set():
+            for line in ctrl.pump(0.5):
+                event = parse_event(line)
+                if event is not None and event.kind is EventKind.GROUP_REMOVED:
+                    emitter("group_finished", {"reason": event.raw})
+                    return 0
+        return 0
+    except (P2PError, SupplicantError, CommandError) as exc:
+        if not stop.is_set():
+            emitter("error", {"code": exc.__class__.__name__, "message": str(exc)})
+            return 1
+        return 0
+    except Exception as exc:  # noqa: BLE001 - report unexpected helper failures
+        if not stop.is_set():
+            emitter("error", {"code": exc.__class__.__name__, "message": str(exc)})
+            return 1
+        return 0
+    finally:
+        try:
+            backend.close()
+        except Exception as exc:  # noqa: BLE001 - cleanup must not hide the result
+            LOG.warning("helper cleanup failed: %s", exc)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="DexOnLinux privileged P2P helper")
+    parser.add_argument("--interface", required=True)
+    parser.add_argument("--backend", choices=["direct"], default="direct")
+    parser.add_argument("--p2p-freq", type=int, default=2437)
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    stop = threading.Event()
+
+    def handle_signal(_signum, _frame):
+        stop.set()
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
+    try:
+        ctrl = SupplicantControl(find_ctrl_socket(args.interface))
+        backend = DirectBackend(
+            args.interface,
+            ctrl,
+            WfdConfigurator(),
+            LinkConfigurator(SubprocessRunner()),
+            frequency=args.p2p_freq,
+        )
+    except (SupplicantError, CommandError) as exc:
+        emit("error", {"code": exc.__class__.__name__, "message": str(exc)})
+        return 1
+
+    return serve(backend, ctrl, stop, emit, args.backend, args.interface)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
