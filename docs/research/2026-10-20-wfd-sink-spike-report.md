@@ -724,6 +724,7 @@ sudo iw dev p2p-wlp0s20-N del
   - `wpa_supplicant/wpa_supplicant.c`
 - Documenti del repo:
   - `docs/research/2026-10-20-wfd-sink-without-miraclecast.md`
+  - `docs/research/2026-10-21-network-stack-support-matrix.md`
   - `docs/superpowers/specs/2026-10-20-miraclecast-free-wifi-link-design.md`
   - `spike/README.md`
 
