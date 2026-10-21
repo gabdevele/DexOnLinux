@@ -7,6 +7,7 @@ NetworkManager.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import signal
 import sys
@@ -24,15 +25,11 @@ def main(argv: list[str] | None = None) -> int:
     # The helper keeps the write end of this pipe open for the session. EOF
     # means the helper exited or crashed, so NetworkManager must not stay
     # stopped.
-    try:
+    with contextlib.suppress(AttributeError, OSError):
         sys.stdin.buffer.read()
-    except (AttributeError, OSError):
-        pass
 
-    try:
+    with contextlib.suppress(ProcessLookupError):
         os.kill(pid, signal.SIGCONT)
-    except ProcessLookupError:
-        pass
     return 0
 
 

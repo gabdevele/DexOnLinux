@@ -156,5 +156,5 @@ uv run --only-group dev python -m build
 uv run --only-group dev python -m twine check dist/*
 ```
 
-The `spike/` directory is the reference implementation used during research; the
+The research reports and decision records live under `docs/research/`; the
 product code is under `src/dexonlinux/`.

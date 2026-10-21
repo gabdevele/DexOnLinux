@@ -85,7 +85,14 @@ def test_serve_emits_group_finished_and_closes():
 def test_serve_reports_backend_error():
     backend = FakeBackend(error=P2PError("phone requested a PIN"))
     events = []
-    rc = serve(backend, FakeCtrl(), threading.Event(), lambda kind, data: events.append((kind, data)), "direct", "wlp-test")
+    rc = serve(
+        backend,
+        FakeCtrl(),
+        threading.Event(),
+        lambda kind, data: events.append((kind, data)),
+        "direct",
+        "wlp-test",
+    )
     assert rc == 1
     assert events[-1][0] == "error"
     assert "PIN" in events[-1][1]["message"]

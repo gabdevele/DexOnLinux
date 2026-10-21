@@ -363,7 +363,6 @@ wheels = [
 
 [[package]]
 name = "dexonlinux"
-version = "1.0.2"
 source = { editable = "." }
 dependencies = [
     { name = "colorama" },
@@ -380,7 +379,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "colorama", specifier = "==0.4.6" }]
+requires-dist = [{ name = "colorama", specifier = ">=0.4.6" }]
 
 [package.metadata.requires-dev]
 dev = [

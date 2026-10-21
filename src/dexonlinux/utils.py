@@ -61,17 +61,18 @@ def configure_logger(debug=False, no_color=False, log_file=None):
 
 def print_ascii_art():
     art = r"""
-      ____             ___        _     _                  
+      ____             ___        _     _
      |  _ \  _____  __/ _ \ _ __ | |   (_)_ __  _   ___  __
      | | | |/ _ \ \/ / | | | '_ \| |   | | '_ \| | | \ \/ /
-     | |_| |  __/>  <| |_| | | | | |___| | | | | |_| |>  < 
+     | |_| |  __/>  <| |_| | | | | |___| | | | | |_| |>  <
      |____/ \___/_/\_\\___/|_| |_|_____|_|_| |_|\__,_/_/\_\
     """
     border = "═" * 70
     print(colored(f"\n╔{border}╗", Fore.LIGHTYELLOW_EX))
     for line in art.splitlines():
         if line.strip():
-            print(colored("║", Fore.LIGHTYELLOW_EX) + colored(line.center(70), Fore.LIGHTYELLOW_EX) + colored("║", Fore.LIGHTYELLOW_EX))
+            centered = colored(line.center(70), Fore.LIGHTYELLOW_EX)
+            print(colored("║", Fore.LIGHTYELLOW_EX) + centered + colored("║", Fore.LIGHTYELLOW_EX))
     print(colored(f"╚{border}╝\n", Fore.LIGHTYELLOW_EX))
 
     message = (

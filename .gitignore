@@ -7,3 +7,4 @@ dist/
 .venv/
 .miracle-sink.history
 .python-version
+.ruff_cache/

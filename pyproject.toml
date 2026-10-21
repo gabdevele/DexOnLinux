@@ -1,6 +1,6 @@
 [project]
 name = "dexonlinux"
-version = "1.0.2"
+dynamic = ["version"]
 description = "Stream Samsung DeX to a Linux desktop over Wi-Fi Direct."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -24,7 +24,7 @@ classifiers = [
     "Topic :: System :: Networking",
 ]
 dependencies = [
-    "colorama==0.4.6",
+    "colorama>=0.4.6",
 ]
 
 [project.scripts]
@@ -53,3 +53,16 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 dexonlinux = ["assets/*.png"]
+
+[tool.setuptools.dynamic]
+version = { attr = "dexonlinux.__version__" }
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RET"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

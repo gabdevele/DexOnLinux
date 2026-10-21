@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -132,10 +133,7 @@ def _helper_command(
     sudo_password: str | None,
 ) -> list[str]:
     executable = shutil.which("dexonlinux-linkd")
-    if executable:
-        command = [executable]
-    else:
-        command = [sys.executable, "-m", "dexonlinux.helper"]
+    command = [executable] if executable else [sys.executable, "-m", "dexonlinux.helper"]
     sudo = ["sudo", "-S", "-p", ""] if sudo_password is not None else ["sudo", "-n"]
     command = [*sudo, *command, "--interface", interface, "--backend", backend]
     if suspend_nm:
@@ -184,10 +182,8 @@ def _read_stderr(stream) -> None:
 
 
 def _signal_group(pid: int, sig: int) -> None:
-    try:
+    with contextlib.suppress(ProcessLookupError):
         os.killpg(os.getpgid(pid), sig)
-    except ProcessLookupError:
-        pass
 
 
 def _now() -> float:

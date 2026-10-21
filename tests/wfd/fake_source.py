@@ -6,6 +6,7 @@ Implements just enough of the AOSP source state machine to drive
 
 from __future__ import annotations
 
+import contextlib
 import socket
 import threading
 import time
@@ -39,10 +40,8 @@ class FakeSource:
         self._done = threading.Event()
 
     def close(self) -> None:
-        try:
+        with contextlib.suppress(OSError):
             self._server.close()
-        except OSError:
-            pass
 
     def wait(self, timeout: float = 15.0) -> None:
         self._done.wait(timeout)

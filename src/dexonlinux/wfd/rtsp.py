@@ -8,6 +8,7 @@ are drained and dropped.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import socket
 import threading
@@ -146,10 +147,8 @@ class RtspConnection:
             self._buffer += chunk
 
     def close(self) -> None:
-        try:
+        with contextlib.suppress(OSError):
             self._sock.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
         self._sock.close()
 
 
@@ -372,10 +371,8 @@ class WfdSink:
             self._conn.close()
             self._conn = None
         if self._rtp_sock is not None:
-            try:
+            with contextlib.suppress(OSError):
                 self._rtp_sock.close()
-            except OSError:
-                pass
             self._rtp_sock = None
         if self._rtp_thread is not None:
             self._rtp_thread.join(timeout=1.0)
