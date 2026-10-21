@@ -19,18 +19,22 @@ stdlib-first Wi-Fi Display sink.
   restarted or replaced.
 - A watchdog resumes NetworkManager even if the helper crashes.
 
-The GO role is deliberate: on the Intel AX201, the reverse role (phone GO,
-laptop client) triggers an iwlwifi firmware crash during the client
-reauthentication after WPS. The GO path was stable with the STA on 5 GHz and the
-P2P group on 2437 MHz; the station band is not changed.
+The GO role is the v1 product path: a negotiation that would put the laptop in
+the client role fails the session with a clear error. The reverse role crashed
+the iwlwifi firmware of the reference Intel AX201 during the post-WPS client
+reauthentication (recorded in `docs/research/2026-10-21-live-acceptance.md`);
+other adapters may fare better, but v1 keeps this single tested path. The
+station band is left to NetworkManager and is never changed.
 
 No reboot, no private supplicant, no Miraclecast.
 
 ## Requirements
 
 - Python 3.9 or newer
-- a Wi-Fi adapter and driver with P2P GO support and 2.4 GHz operation
-  (the P2P group is created on 2437 MHz; the station can stay on 2.4 or 5 GHz)
+- a Wi-Fi adapter and driver with P2P GO support
+  (the P2P group runs on 2437 MHz by default; `--doctor` validates the
+  frequency against the adapter's channel list and `--p2p-freq <MHz>` overrides
+  it when needed; the station can stay on any band)
 - NetworkManager + wpa_supplicant (tested on Ubuntu 24.04, NetworkManager 1.46,
   Intel AX201; standalone wpa_supplicant is also supported)
 - `iw`, `ip`, `adb`, `scrcpy`, `sudo`
@@ -83,13 +87,16 @@ dexonlinux
 dexonlinux --interface wlan0 --device R5CN1234567
 dexonlinux --display-id 2
 dexonlinux --fullscreen
+dexonlinux --p2p-freq 5180
 dexonlinux --debug --log-file dexonlinux.log
 dexonlinux --no-banner --no-color
 ```
 
 `dexonlinux --doctor` is read-only and prints the detected network stack, the
 selected P2P backend, whether NetworkManager will be paused, and any reasons the
-host is unsupported.
+host is unsupported. It also checks that the requested P2P frequency
+(`--p2p-freq`, default 2437 MHz) is in the adapter's channel list, and suggests
+usable channels when it is not.
 
 On the phone:
 
@@ -106,9 +113,9 @@ wpa_supplicant control socket:
 1. It configures the WFD information elements and listens for PBC.
 2. Immediately before `P2P_CONNECT`, it sends `SIGSTOP` to NetworkManager.
    This prevents NetworkManager from removing an externally created P2P group.
-3. It creates the group as GO on `freq=2437`, pre-ups the group interface after
-   GO negotiation, configures `192.168.49.1/24`, and serves the phone the
-   `192.168.49.2` DHCP lease.
+3. It creates the group as GO on the configured frequency (2437 MHz by
+   default), pre-ups the group interface after GO negotiation, configures
+   `192.168.49.1/24`, and serves the phone the `192.168.49.2` DHCP lease.
 4. The user process runs the RTSP sink against the phone's DHCP address and
    starts scrcpy when streaming begins.
 5. On exit, Ctrl-C or a crash, the helper removes the group and sends
@@ -126,11 +133,11 @@ The station Wi-Fi and its routes are not modified, so internet stays available.
   wpa_supplicant is running under NetworkManager.
 - Phone shows `DexOnLinux` as previously connected: forget the device in Smart
   View and retry.
-- The P2P group is created on 2437 MHz. A 5 GHz-only adapter or a phone that
-  refuses 2.4 GHz P2P cannot use this v1 path; the station band itself is not
-  changed.
-- The old phone-GO/laptop-client role is not used: it crashed the AX201 firmware
-  during the post-WPS client reauthentication.
+- `frequency 2437 MHz is not supported by this adapter`: the doctor lists the
+  usable channels; pass one of them with `--p2p-freq <MHz>`. A phone that
+  refuses the chosen band still cannot use this v1 path.
+- The phone-GO/laptop-client role is not used in v1: it crashed the reference
+  adapter's firmware during the post-WPS client reauthentication.
 - Wrong display: reconnect DeX and choose the display marked as likely DeX, or
   pass `--display-id`.
 - Verify internet during a session with `ping -c 3 1.1.1.1`; it should stay at
@@ -155,6 +162,9 @@ Build and check the package:
 uv run --only-group dev python -m build
 uv run --only-group dev python -m twine check dist/*
 ```
+
+The product CLI always starts the helper with `--role go`; the helper also
+accepts `--role client` for diagnostics (`python -m dexonlinux.helper --help`).
 
 The research reports and decision records live under `docs/research/`; the
 product code is under `src/dexonlinux/`.
