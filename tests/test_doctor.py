@@ -1,9 +1,17 @@
-from dexonlinux.doctor import list_p2p_interfaces, probe_stack
+from dexonlinux.doctor import list_p2p_interfaces, parse_phy_frequencies, probe_stack
 from tests.fakes import FakeRunner
 
 
-def outputs(*, nm="active", iwd="inactive", connman="inactive", modes=True):
-    return {
+def outputs(
+    *,
+    nm="active",
+    iwd="inactive",
+    connman="inactive",
+    modes=True,
+    frequencies=(2412, 2437, 2462),
+    wiphy=True,
+):
+    commands = {
         ("systemctl", "is-active", "NetworkManager"): f"{nm}\n",
         ("systemctl", "is-active", "iwd"): f"{iwd}\n",
         ("systemctl", "is-active", "connman"): f"{connman}\n",
@@ -15,13 +23,18 @@ def outputs(*, nm="active", iwd="inactive", connman="inactive", modes=True):
             "\t\ttype managed\n"
         ),
         ("iw", "list"): (
-            "Supported interface modes:\n"
-            " * P2P-client\n"
-            " * P2P-GO\n"
+            "Supported interface modes:\n * P2P-client\n * P2P-GO\n"
             if modes
             else "Supported interface modes:\n * managed\n"
         ),
     }
+    if wiphy:
+        commands[("iw", "dev", "wlp0s20f3", "info")] = "Interface wlp0s20f3\n\twiphy 2\n"
+    if frequencies is not None:
+        commands[("iw", "phy", "phy2", "info")] = "Frequencies:\n" + "".join(
+            f"\t\t* {value} MHz [{index}] (20.0 dBm)\n" for index, value in enumerate(frequencies, start=1)
+        )
+    return commands
 
 
 def which_all(name):
@@ -124,6 +137,58 @@ def test_missing_session_commands_is_unsupported(tmp_path):
 
     assert report.supported is False
     assert "adb" in " ".join(report.reasons)
+
+
+def test_unsupported_frequency_is_reported(tmp_path):
+    (tmp_path / "p2p-dev-wlp0s20").touch()
+    report = probe_stack(
+        FakeRunner(outputs(frequencies=(5180, 5200))),
+        "wlp0s20f3",
+        ctrl_dir=tmp_path,
+        which=which_all,
+    )
+
+    assert report.supported is False
+    reasons = " ".join(report.reasons)
+    assert "2437" in reasons
+    assert "--p2p-freq" in reasons
+
+
+def test_requested_frequency_is_validated(tmp_path):
+    (tmp_path / "p2p-dev-wlp0s20").touch()
+    report = probe_stack(
+        FakeRunner(outputs(frequencies=(5180, 5200))),
+        "wlp0s20f3",
+        ctrl_dir=tmp_path,
+        which=which_all,
+        freq=5180,
+    )
+
+    assert report.supported is True
+
+
+def test_missing_wiphy_skips_the_frequency_check(tmp_path):
+    (tmp_path / "p2p-dev-wlp0s20").touch()
+    report = probe_stack(
+        FakeRunner(outputs(frequencies=(5180,), wiphy=False)),
+        "wlp0s20f3",
+        ctrl_dir=tmp_path,
+        which=which_all,
+    )
+
+    assert report.supported is True
+
+
+def test_parse_phy_frequencies_reads_only_usable_channels():
+    parsed = parse_phy_frequencies(
+        "Frequencies:\n"
+        "\t\t* 2412 MHz [1] (20.0 dBm)\n"
+        "\t\t* 2437 MHz [6] (20.0 dBm)\n"
+        "\t\t* 2472 MHz [13] (disabled)\n"
+        "\t\t* 5180 MHz [36] (20.0 dBm)\n"
+        "\t\t* 5260 MHz [52] (no IR)\n"
+    )
+    assert parsed == [2412, 2437, 5180]
 
 
 def test_list_p2p_interfaces_checks_the_phy_modes(tmp_path):

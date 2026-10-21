@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from dexonlinux.p2p.base import DEFAULT_P2P_FREQ
 from dexonlinux.system import CommandResult, Runner
 
 CTRL_DIR = Path("/run/wpa_supplicant")
 NET_DIR = Path("/sys/class/net")
 REQUIRED_COMMANDS = ("sudo", "iw", "ip", "adb", "scrcpy")
+_MAX_SUGGESTED_FREQUENCIES = 12
+_FREQUENCY = re.compile(r"^\s*\*\s*(\d+)\s*MHz")
 
 
 @dataclass(frozen=True)
@@ -43,13 +47,9 @@ def list_p2p_interfaces(
         info = _run(runner, ["iw", "dev", iface, "info"])
         if info is None:
             continue
-        wiphy = next(
-            (line.split()[1] for line in info.stdout.splitlines() if line.strip().startswith("wiphy ")),
-            None,
-        )
-        if not wiphy:
+        phy = _phy_from_info(info)
+        if phy is None:
             continue
-        phy = wiphy if wiphy.startswith("phy") else f"phy{wiphy}"
         modes = _run(runner, ["iw", "phy", phy, "info"])
         if modes is None:
             continue
@@ -58,14 +58,38 @@ def list_p2p_interfaces(
     return interfaces
 
 
+def parse_phy_frequencies(output: str) -> list[int]:
+    """Return the usable channels (MHz) listed by ``iw phy <phy> info``.
+
+    Disabled channels and channels flagged "no IR" cannot host a P2P GO.
+    """
+    frequencies: list[int] = []
+    for line in output.splitlines():
+        match = _FREQUENCY.match(line)
+        if match is None:
+            continue
+        lowered = line.lower()
+        if "disabled" in lowered or "no ir" in lowered:
+            continue
+        frequencies.append(int(match.group(1)))
+    return frequencies
+
+
 def probe_stack(
     runner: Runner,
     interface: str,
     *,
+    freq: int | None = None,
     ctrl_dir: Path = CTRL_DIR,
     which: Callable[[str], str | None] = shutil.which,
 ) -> StackReport:
-    """Inspect the host without changing it."""
+    """Inspect the host without changing it.
+
+    ``freq`` is the P2P frequency the session would request; when omitted the
+    default (DEFAULT_P2P_FREQ) is validated instead. The frequency check is
+    skipped when the adapter cannot be resolved, so unusual ``iw`` output
+    never produces a false negative.
+    """
     nm_active = _service_active(runner, "NetworkManager")
     iwd_active = _service_active(runner, "iwd")
     connman_active = _service_active(runner, "connman")
@@ -108,6 +132,16 @@ def probe_stack(
         if "P2P-GO" not in modes.stdout:
             reasons.append("driver does not advertise P2P-GO mode")
 
+    requested = freq if freq is not None else DEFAULT_P2P_FREQ
+    phy = _wiphy(runner, interface)
+    frequencies = _frequencies(runner, phy) if phy else []
+    if frequencies and requested not in frequencies:
+        suggestions = ", ".join(str(value) for value in frequencies[:_MAX_SUGGESTED_FREQUENCIES])
+        reasons.append(
+            f"frequency {requested} MHz is not supported by this adapter; "
+            f"pass --p2p-freq with one of: {suggestions}"
+        )
+
     missing = [name for name in REQUIRED_COMMANDS if which(name) is None]
     if missing:
         reasons.append("missing commands: " + ", ".join(missing))
@@ -119,6 +153,25 @@ def probe_stack(
         reasons=tuple(reasons),
         suspend_nm=suspend_nm,
     )
+
+
+def _wiphy(runner: Runner, interface: str) -> str | None:
+    info = _run(runner, ["iw", "dev", interface, "info"])
+    return _phy_from_info(info) if info is not None else None
+
+
+def _phy_from_info(info: CommandResult) -> str | None:
+    for line in info.stdout.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("wiphy "):
+            value = stripped.split()[1]
+            return value if value.startswith("phy") else f"phy{value}"
+    return None
+
+
+def _frequencies(runner: Runner, phy: str) -> list[int]:
+    info = _run(runner, ["iw", "phy", phy, "info"])
+    return parse_phy_frequencies(info.stdout) if info is not None else []
 
 
 def _run(runner: Runner, args: list[str]) -> CommandResult | None:

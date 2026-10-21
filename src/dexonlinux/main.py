@@ -20,11 +20,12 @@ from dexonlinux.device import Device
 from dexonlinux.doctor import StackReport, list_p2p_interfaces, probe_stack
 from dexonlinux.helper.client import HelperClient
 from dexonlinux.log import setup_logging
-from dexonlinux.p2p.base import P2PError, P2PRole
+from dexonlinux.models import AdbDevice
+from dexonlinux.p2p.base import DEFAULT_P2P_FREQ, P2PError, P2PRole
 from dexonlinux.scrcpy import ScrcpySession
 from dexonlinux.session import DexSession
 from dexonlinux.system import CommandError, SubprocessRunner
-from dexonlinux.wfd.rtsp import WfdSink
+from dexonlinux.wfd.rtsp import RTSP_PORT, WfdSink
 
 LOG = logging.getLogger(__name__)
 
@@ -42,6 +43,13 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["auto", "direct"],
         default="auto",
         help="P2P backend (auto selects the supported direct backend).",
+    )
+    parser.add_argument(
+        "--p2p-freq",
+        type=int,
+        default=DEFAULT_P2P_FREQ,
+        metavar="MHZ",
+        help="P2P operating frequency in MHz (default: 2437). --doctor validates it against the adapter.",
     )
     parser.add_argument("--doctor", action="store_true", help="Check the host stack and exit.")
     parser.add_argument("--debug", action="store_true", help="Show debug logs.")
@@ -74,7 +82,7 @@ def choose_interface(interfaces: list[str], requested: str | None) -> str:
     return selected
 
 
-def choose_adb_device(device: Device, requested: str | None):
+def choose_adb_device(device: Device, requested: str | None) -> AdbDevice:
     if not requested:
         print_adb_instructions()
 
@@ -134,7 +142,7 @@ def print_report(interface: str, report: StackReport) -> None:
             print(f"  - {reason}")
 
 
-def doctor(runner: SubprocessRunner, interface: str | None) -> int:
+def doctor(runner: SubprocessRunner, interface: str | None, freq: int) -> int:
     interfaces = [interface] if interface else list_p2p_interfaces(runner)
     if not interfaces:
         LOG.error("No P2P-capable Wi-Fi interface found.")
@@ -142,7 +150,7 @@ def doctor(runner: SubprocessRunner, interface: str | None) -> int:
 
     supported = 0
     for name in interfaces:
-        report = probe_stack(runner, name)
+        report = probe_stack(runner, name, freq=freq)
         print_report(name, report)
         supported += int(report.supported)
     return 0 if supported == len(interfaces) else 1
@@ -179,11 +187,11 @@ def run(args: argparse.Namespace) -> int:
 
     runner = SubprocessRunner()
     if args.doctor:
-        return doctor(runner, args.interface)
+        return doctor(runner, args.interface, args.p2p_freq)
 
     interfaces = list_p2p_interfaces(runner)
     interface = choose_interface(interfaces, args.interface)
-    report = probe_stack(runner, interface)
+    report = probe_stack(runner, interface, freq=args.p2p_freq)
     print_report(interface, report)
     if not report.supported:
         raise CommandError("The host stack is not supported. Fix the items above and retry.")
@@ -196,6 +204,7 @@ def run(args: argparse.Namespace) -> int:
     helper = HelperClient.start(
         interface,
         role=P2PRole.GO,
+        frequency=args.p2p_freq,
         suspend_nm=report.suspend_nm,
         sudo_password=sudo_password,
     )
@@ -209,7 +218,7 @@ def run(args: argparse.Namespace) -> int:
         session = DexSession(
             helper,
             scrcpy,
-            lambda host: WfdSink(host, 7236, connect_timeout=5.0),
+            lambda host: WfdSink(host, RTSP_PORT, connect_timeout=5.0),
             start_delay=1.0,
         )
         print_dex_instructions()
