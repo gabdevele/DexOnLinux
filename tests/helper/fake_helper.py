@@ -13,10 +13,10 @@ print(
             "data": {
                 "ifname": "p2p-test",
                 "role": "client",
-                "client_ip": "192.168.49.200",
-                "client_prefix": 24,
-                "go_ip": "192.168.49.1",
-                "peer_mac": "aa:bb:cc:dd:ee:ff",
+                "local_ip": "192.168.49.200",
+                "peer_ip": "192.168.49.1",
+                "local_prefix": 24,
+                "go_dev_addr": "aa:bb:cc:dd:ee:ff",
                 "frequency": 2437,
             },
         }

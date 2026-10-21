@@ -104,7 +104,7 @@ def test_pbc_request_starts_client_connect_and_returns_group():
     assert "P2P_CONNECT ce:f9:f0:2b:8a:cc pbc freq=2437 go_intent=0" in ctrl.commands
     assert link.configured == [("p2p-wlp0s20-7", "192.168.49.200/24")]
     assert group.role == "client"
-    assert group.go_ip == "192.168.49.1"
+    assert group.peer_ip == "192.168.49.1"
 
 
 def test_preup_waits_for_go_negotiation_success():

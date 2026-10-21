@@ -9,10 +9,9 @@ def group_info(**overrides):
     values = {
         "ifname": "p2p-test",
         "role": "client",
-        "client_ip": "192.168.49.200",
-        "client_prefix": 24,
-        "go_ip": "192.168.49.1",
-        "peer_mac": "aa:bb:cc:dd:ee:ff",
+        "local_ip": "192.168.49.200",
+        "local_prefix": 24,
+        "peer_ip": "192.168.49.1",
         "frequency": 2437,
     }
     values.update(overrides)
@@ -113,24 +112,22 @@ def test_scrcpy_exit_stops_the_sink():
 
 
 def test_go_role_without_peer_ip_is_rejected():
-    helper = FakeHelper(group_info(role="GO", go_ip=None))
+    helper = FakeHelper(group_info(role="GO", peer_ip=None))
     session = DexSession(helper, FakeScrcpy(), lambda host: FakeSink())
     assert session.run() == 1
     assert helper.stopped is True
 
 
 def test_go_role_uses_peer_ip_for_rtsp():
-    helper = FakeHelper(
-        group_info(role="GO", client_ip="192.168.49.1", go_ip=None, peer_ip="192.168.49.2")
-    )
+    helper = FakeHelper(group_info(role="GO", local_ip="192.168.49.1", peer_ip="192.168.49.2"))
     hosts = []
     session = DexSession(helper, FakeScrcpy(), lambda host: hosts.append(host) or FakeSink(), start_delay=0)
     assert session.run() == 0
     assert hosts == ["192.168.49.2"]
 
 
-def test_client_role_without_go_ip_is_rejected():
-    helper = FakeHelper(group_info(go_ip=None))
+def test_client_role_without_peer_ip_is_rejected():
+    helper = FakeHelper(group_info(peer_ip=None))
     session = DexSession(helper, FakeScrcpy(), lambda host: FakeSink())
     assert session.run() == 1
     assert helper.stopped is True

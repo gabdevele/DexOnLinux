@@ -36,7 +36,7 @@ class DexSession:
             data = event.data
             role = data.get("role")
             if role == "client":
-                host = data.get("go_ip")
+                host = data.get("peer_ip")
                 if not host:
                     raise P2PError("P2P group has no GO address")
             elif role == "GO":

@@ -24,7 +24,7 @@ def test_client_reads_events_and_stops():
         assert client.wait_for("ready", timeout=2).data["backend"] == "direct"
         group = client.wait_for("group_started", timeout=2)
         assert group.data["ifname"] == "p2p-test"
-        assert group.data["client_ip"] == "192.168.49.200"
+        assert group.data["local_ip"] == "192.168.49.200"
     finally:
         client.stop()
     assert client.process.poll() is not None

@@ -2,7 +2,7 @@ import threading
 from pathlib import Path
 
 from dexonlinux.helper.__main__ import serve
-from dexonlinux.p2p.base import GroupInfo, P2PError
+from dexonlinux.p2p.base import GroupInfo, P2PError, P2PRole
 
 
 class FakeCtrl:
@@ -15,6 +15,17 @@ class FakeCtrl:
         if self.lines:
             return [self.lines.pop(0)]
         return []
+
+
+def client_group() -> GroupInfo:
+    return GroupInfo(
+        ifname="p2p-test",
+        role=P2PRole.CLIENT,
+        local_ip="192.168.49.200",
+        local_prefix=24,
+        peer_ip="192.168.49.1",
+        frequency=2437,
+    )
 
 
 class FakeBackend:
@@ -30,15 +41,7 @@ class FakeBackend:
         if self.error:
             raise self.error
         stop.set()
-        return GroupInfo(
-            ifname="p2p-test",
-            role="client",
-            client_ip="192.168.49.200",
-            client_prefix=24,
-            go_ip="192.168.49.1",
-            peer_mac="aa:bb:cc:dd:ee:ff",
-            frequency=2437,
-        )
+        return client_group()
 
     def close(self):
         self.closed = True
@@ -59,15 +62,7 @@ def test_serve_emits_ready_and_group_then_closes():
 def test_serve_emits_group_finished_and_closes():
     backend = FakeBackend()
     # connect() sets stop, so run the removal path without that fake behavior.
-    backend.connect = lambda stop: GroupInfo(
-        ifname="p2p-test",
-        role="client",
-        client_ip="192.168.49.200",
-        client_prefix=24,
-        go_ip="192.168.49.1",
-        peer_mac="aa:bb:cc:dd:ee:ff",
-        frequency=2437,
-    )
+    backend.connect = lambda stop: client_group()
     events = []
     rc = serve(
         backend,

@@ -1,4 +1,5 @@
 # tests/p2p/test_events.py
+from dexonlinux.p2p.base import P2PRole
 from dexonlinux.p2p.events import EventKind, parse_event
 
 
@@ -31,7 +32,7 @@ def test_parses_go_negotiation_success_without_leading_mac():
         "P2P-GO-NEG-SUCCESS role=client freq=2437 ht40=0 "
         "peer_dev=ce:f9:f0:2b:8a:cc peer_iface=ce:f9:f0:2b:0a:cc wps_method=PBC"
     )
-    assert event.kind is EventKind.GO_NEGOTIATION
+    assert event.kind is EventKind.GO_NEGOTIATION_SUCCESS
     assert event.peer.mac == "ce:f9:f0:2b:0a:cc"
     assert event.passwd_id is None
     assert event.raw.startswith("P2P-GO-NEG-SUCCESS")
@@ -53,17 +54,18 @@ def test_parses_client_group_with_wps_address():
     )
     assert event.kind is EventKind.GROUP_STARTED
     assert event.group.ifname == "p2p-wlp0s20-7"
-    assert event.group.role == "client"
-    assert event.group.client_ip == "192.168.49.200"
-    assert event.group.client_prefix == 24
-    assert event.group.go_ip == "192.168.49.1"
-    assert event.group.peer_mac == "ce:f9:f0:2b:0a:cc"
+    assert event.group.role is P2PRole.CLIENT
+    assert event.group.local_ip == "192.168.49.200"
+    assert event.group.local_prefix == 24
+    assert event.group.peer_ip == "192.168.49.1"
+    assert event.group.go_dev_addr == "ce:f9:f0:2b:0a:cc"
     assert event.group.frequency == 2437
 
 
 def test_parses_go_role_group():
     event = parse_event('P2P-GROUP-STARTED p2p-wlp0s20-8 GO ssid="x" freq=2437')
-    assert event.group.role == "GO"
+    assert event.group.role is P2PRole.GO
+    assert event.group.peer_ip is None
 
 
 def test_rejects_malformed_and_ignores_unknown():

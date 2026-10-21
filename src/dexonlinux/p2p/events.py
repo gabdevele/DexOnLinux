@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
-from dexonlinux.p2p.base import GroupInfo, Peer
+from dexonlinux.p2p.base import GroupInfo, P2PRole, Peer
 
 _MAC = r"[0-9a-fA-F:]{17}"
 _PRIORITY = re.compile(r"^<\d+>")
@@ -29,6 +29,7 @@ class EventKind(Enum):
     PIN_REQUEST = "pin_request"
     INVITATION = "invitation"
     GO_NEGOTIATION = "go_negotiation"
+    GO_NEGOTIATION_SUCCESS = "go_negotiation_success"
     GROUP_STARTED = "group_started"
     GROUP_REMOVED = "group_removed"
     FAILURE = "failure"
@@ -63,6 +64,7 @@ def _group(line: str, parts: list[str]) -> GroupInfo | None:
     role_token = parts[2].removeprefix("role=").lower()
     if role_token not in {"client", "go"}:
         return None
+    role = P2PRole.CLIENT if role_token == "client" else P2PRole.GO
 
     ip_match = _IP_ADDR.search(line)
     mask_match = _IP_MASK.search(line)
@@ -71,12 +73,12 @@ def _group(line: str, parts: list[str]) -> GroupInfo | None:
     freq_match = _FREQ.search(line)
     return GroupInfo(
         ifname=ifname,
-        role="client" if role_token == "client" else "GO",
-        client_ip=ip_match.group(1) if ip_match else None,
-        client_prefix=_prefix(mask_match.group(1)) if mask_match else 24,
-        go_ip=go_ip_match.group(1) if go_ip_match else None,
-        peer_mac=go_dev_match.group(1) if go_dev_match else "",
+        role=role,
+        local_ip=ip_match.group(1) if ip_match else None,
+        peer_ip=go_ip_match.group(1) if go_ip_match else None,
+        local_prefix=_prefix(mask_match.group(1)) if mask_match else 24,
         frequency=int(freq_match.group(1)) if freq_match else None,
+        go_dev_addr=go_dev_match.group(1) if go_dev_match else "",
     )
 
 
@@ -132,11 +134,9 @@ def parse_event(line: str) -> P2PEvent | None:
         peer_match = _PEER_IFACE.search(line) or _PEER_DEV.search(line)
         if peer_match is None:
             return None
-        passwd_match = _PASSWD_ID.search(line)
         return P2PEvent(
-            EventKind.GO_NEGOTIATION,
+            EventKind.GO_NEGOTIATION_SUCCESS,
             peer=Peer(mac=peer_match.group(1)),
-            passwd_id=int(passwd_match.group(1)) if passwd_match else None,
             raw=line,
         )
 

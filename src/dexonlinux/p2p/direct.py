@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable
 from dataclasses import replace
 
-from dexonlinux.p2p.base import GroupInfo, P2PError
+from dexonlinux.p2p.base import GroupInfo, P2PError, P2PRole
 from dexonlinux.p2p.events import EventKind, parse_event
 
 LOG = logging.getLogger(__name__)
@@ -68,13 +68,13 @@ class DirectBackend:
                 elif event.kind is EventKind.GO_NEGOTIATION:
                     if event.passwd_id is not None and event.passwd_id != 4:
                         raise P2PError("phone requested a non-PBC WPS method; PBC is required")
-                    if event.raw.startswith("P2P-GO-NEG-SUCCESS "):
-                        # The group netdev appears during GO negotiation. Bring it
-                        # up after the negotiation has settled but before auth;
-                        # doing it earlier exposes an iwlwifi link-config race.
-                        self._start_preup()
-                    elif event.peer is not None and not self._connect_pending():
+                    if event.peer is not None and not self._connect_pending():
                         self._send_connect(event.peer.mac)
+                elif event.kind is EventKind.GO_NEGOTIATION_SUCCESS:
+                    # The group netdev appears during GO negotiation. Bring it
+                    # up after the negotiation has settled but before auth;
+                    # doing it earlier exposes an iwlwifi link-config race.
+                    self._start_preup()
                 elif event.kind is EventKind.GROUP_STARTED:
                     return self._group_started(event.group)
                 elif event.kind is EventKind.FAILURE:
@@ -92,22 +92,22 @@ class DirectBackend:
             raise P2PError("malformed P2P group event")
         self.group_ifname = group.ifname
         self._pending_until = 0.0
-        if group.role == "GO":
+        if group.role is P2PRole.GO:
             if self._go_intent == 0:
                 raise P2PError("phone negotiated the laptop as GO; client role required")
-            local_ip = group.client_ip or "192.168.49.1"
-            prefix = group.client_prefix if group.client_ip else 24
+            local_ip = group.local_ip or "192.168.49.1"
+            prefix = group.local_prefix if group.local_ip else 24
             self._link.configure(group.ifname, f"{local_ip}/{prefix}")
             peer_ip = "192.168.49.2"
             if self._dhcp is not None:
                 self._dhcp.start(group.ifname)
                 peer_ip = self._dhcp.peer_ip
             LOG.info("P2P GO %s up with %s/%d, peer lease %s", group.ifname, local_ip, prefix, peer_ip)
-            return replace(group, client_ip=local_ip, peer_ip=peer_ip)
-        if not group.client_ip:
+            return replace(group, local_ip=local_ip, peer_ip=peer_ip)
+        if not group.local_ip:
             raise P2PError("group started without a WPS client address; DHCP fallback is not implemented in v1")
-        self._link.configure(group.ifname, f"{group.client_ip}/{group.client_prefix}")
-        LOG.info("P2P group %s up with %s/%d", group.ifname, group.client_ip, group.client_prefix)
+        self._link.configure(group.ifname, f"{group.local_ip}/{group.local_prefix}")
+        LOG.info("P2P group %s up with %s/%d", group.ifname, group.local_ip, group.local_prefix)
         return group
 
     def _connect_pbc(self, mac: str) -> None:
