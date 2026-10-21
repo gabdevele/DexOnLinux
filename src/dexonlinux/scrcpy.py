@@ -8,10 +8,10 @@ import subprocess
 import threading
 import time
 
+from dexonlinux.console import asset_path, select_from_list
 from dexonlinux.device import Device
 from dexonlinux.models import ScrcpyDisplay
 from dexonlinux.system import CommandError, Runner
-from dexonlinux.utils import get_asset_path, select_from_list
 
 LOG = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ class ScrcpySession:
     def start(self) -> subprocess.Popen[str]:
         display_id = self._resolve_display_id()
         env = os.environ.copy()
-        icon_path = get_asset_path("icon.png")
+        icon_path = asset_path("icon.png")
         if os.path.isfile(icon_path):
             env["SCRCPY_ICON_PATH"] = icon_path
             env["SCRCPY_ICON_DIR"] = os.path.dirname(icon_path)

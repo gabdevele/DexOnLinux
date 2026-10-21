@@ -4,30 +4,29 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import logging
 import sys
 
-from colorama import Fore
-
-from dexonlinux.device import Device
-from dexonlinux.doctor import StackReport, list_p2p_interfaces, probe_stack
-from dexonlinux.helper.client import HelperClient
-from dexonlinux.p2p.base import P2PError
-from dexonlinux.scrcpy import ScrcpySession
-from dexonlinux.session import DexSession
-from dexonlinux.system import CommandError, SubprocessRunner
-from dexonlinux.utils import (
+from dexonlinux.console import (
+    Fore,
     colored,
-    configure_logger,
     confirm,
-    get_logger,
     print_adb_instructions,
     print_ascii_art,
     print_dex_instructions,
     select_from_list,
 )
+from dexonlinux.device import Device
+from dexonlinux.doctor import StackReport, list_p2p_interfaces, probe_stack
+from dexonlinux.helper.client import HelperClient
+from dexonlinux.log import setup_logging
+from dexonlinux.p2p.base import P2PError
+from dexonlinux.scrcpy import ScrcpySession
+from dexonlinux.session import DexSession
+from dexonlinux.system import CommandError, SubprocessRunner
 from dexonlinux.wfd.rtsp import WfdSink
 
-logger = get_logger()
+LOG = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -92,11 +91,11 @@ def choose_adb_device(device: Device, requested: str | None):
         authorized = [item for item in devices if item.is_authorized]
         blocked = [item for item in devices if not item.is_authorized]
         for item in blocked:
-            logger.warning("ADB device %s is %s.", item.serial, item.state)
+            LOG.warning("ADB device %s is %s.", item.serial, item.state)
 
         if authorized:
             if len(authorized) == 1:
-                logger.info("Using ADB device %s.", authorized[0].serial)
+                LOG.info("Using ADB device %s.", authorized[0].serial)
                 return authorized[0]
             selected = select_from_list(
                 authorized,
@@ -110,7 +109,7 @@ def choose_adb_device(device: Device, requested: str | None):
                 return selected
             raise CommandError("No ADB device selected.")
 
-        logger.error("No authorized ADB devices found.")
+        LOG.error("No authorized ADB devices found.")
         choice = input(
             colored(
                 "Press Enter to refresh ADB devices or type q to quit: ",
@@ -138,7 +137,7 @@ def print_report(interface: str, report: StackReport) -> None:
 def doctor(runner: SubprocessRunner, interface: str | None) -> int:
     interfaces = [interface] if interface else list_p2p_interfaces(runner)
     if not interfaces:
-        logger.error("No P2P-capable Wi-Fi interface found.")
+        LOG.error("No P2P-capable Wi-Fi interface found.")
         return 1
 
     supported = 0
@@ -193,7 +192,7 @@ def run(args: argparse.Namespace) -> int:
     confirm_session(report, args.yes)
     _, sudo_password = prepare_sudo()
 
-    logger.info("Starting Wi-Fi Direct P2P on %s.", interface)
+    LOG.info("Starting Wi-Fi Direct P2P on %s.", interface)
     helper = HelperClient.start(
         interface,
         backend="direct",
@@ -223,20 +222,20 @@ def run(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    configure_logger(debug=args.debug, no_color=args.no_color, log_file=args.log_file)
+    setup_logging(debug=args.debug, color=not args.no_color, log_file=args.log_file)
     try:
         return run(args)
     except CommandError as exc:
-        logger.error("%s", exc)
+        LOG.error("%s", exc)
         return 1
     except P2PError as exc:
-        logger.error("%s", exc)
+        LOG.error("%s", exc)
         return 1
     except KeyboardInterrupt:
-        logger.info("Interrupted.")
+        LOG.info("Interrupted.")
         return 130
     except Exception:
-        logger.exception("Unexpected error")
+        LOG.exception("Unexpected error")
         return 1
 
 
