@@ -1,21 +1,28 @@
 # DexOnLinux - Handoff & Architecture Strategy Document
 
-> **Status update — 2026-10-21: implemented and live-accepted.**
+> **Status update — 2026-10-21: implemented, live-accepted, cleaned up.**
 > The plan below was executed in this workspace:
 > - `miraclecast` is gone; the product uses a modular Python direct backend
 >   (`src/dexonlinux/p2p/`) that talks to `wpa_supplicant` over the P2P
->   ctrl_iface and to NetworkManager via `nmcli`.
-> - The laptop acts as the Wi-Fi Direct **GO** (`go_intent=15`, 2437 MHz), runs
->   a minimal internal DHCP server (`p2p/dhcp.py`) and hands the phone
->   `192.168.49.2`; the phone is the P2P client. The reverse role (phone GO)
->   crashed the Intel AX201 iwlwifi firmware during post-WPS client
->   reauthentication and is not used.
-> - NetworkManager is `SIGSTOP`-ed only between `P2P_CONNECT` and group start
->   and resumed on every exit path, with a crash watchdog. The 5 GHz station
->   connection stays up the whole time; wpa_supplicant is never restarted.
-> - `dexonlinux` drives the helper, the RTSP/RTCP WFD handshake and scrcpy
+>   ctrl_iface and freezes `NetworkManager` with `SIGSTOP` before the group is
+>   created.
+> - The laptop acts as the Wi-Fi Direct **GO** (`go_intent=15`); the phone is the
+>   P2P client. Role and P2P frequency are explicit settings: the CLI passes
+>   `--p2p-freq` (default 2437 MHz) and `--doctor` validates it against the
+>   adapter's channel list. The reverse role crashed the reference Intel AX201
+>   iwlwifi firmware during post-WPS client reauthentication and is not used by
+>   the product path.
+> - A minimal internal DHCP server (`p2p/dhcp.py`) derives mask/broadcast from a
+>   single `GroupNetwork` definition and hands the phone `192.168.49.2`.
+> - NetworkManager is resumed on every exit path, with a crash watchdog; the
+>   station connection stays up the whole time and wpa_supplicant is never
+>   restarted.
+> - `dexonlinux` drives the helper, the RTSP WFD handshake and scrcpy
 >   end-to-end; the DeX display is auto-selected (landscape 16:9).
-> - 74 unit tests + ruff clean; `python -m build` + `twine check` pass.
+> - 100 unit tests, ruff (E,F,W,I,UP,B,SIM,C4,RET @ 120 cols) clean, pytest
+>   configured, CI on Python 3.9/3.12; `python -m build` + `twine check` pass.
+> - The throwaway `spike/` tree is deleted; interaction, logging, models and P2P
+>   types live in focused modules.
 > - Evidence: `docs/research/2026-10-21-live-acceptance.md`.
 >
 > Remaining ideas from section 3 that are still open: `rich`-based UI, polkit
