@@ -7,9 +7,12 @@ import re
 from dexonlinux.models import AdbDevice, ScrcpyDisplay
 from dexonlinux.system import Runner
 
+_DISPLAY_ID = re.compile(r"--display-id=(\d+)(?:\s+\((.*?)\))?")
+_RESOLUTION = re.compile(r"(\d{3,5})x(\d{3,5})")
+
 
 def parse_adb_devices(output: str) -> list[AdbDevice]:
-    devices = []
+    devices: list[AdbDevice] = []
     for line in output.splitlines():
         line = line.strip()
         if not line or line.startswith("List of devices"):
@@ -19,21 +22,19 @@ def parse_adb_devices(output: str) -> list[AdbDevice]:
         parts = line.split(maxsplit=2)
         if len(parts) < 2:
             continue
-        description = parts[2] if len(parts) > 2 else ""
-        devices.append(AdbDevice(serial=parts[0], state=parts[1], description=description))
+        serial, state, *rest = parts
+        devices.append(AdbDevice(serial=serial, state=state, description=rest[0] if rest else ""))
     return devices
 
 
 def parse_scrcpy_displays(output: str) -> list[ScrcpyDisplay]:
-    displays = []
-    pattern = re.compile(r"--display-id=(\d+)(?:\s+\((.*?)\))?")
-    resolution_pattern = re.compile(r"(\d{3,5})x(\d{3,5})")
+    displays: list[ScrcpyDisplay] = []
     for line in output.splitlines():
-        match = pattern.search(line)
-        if not match:
+        match = _DISPLAY_ID.search(line)
+        if match is None:
             continue
         description = match.group(2) or line.strip()
-        resolution = resolution_pattern.search(description)
+        resolution = _RESOLUTION.search(description)
         width = int(resolution.group(1)) if resolution else None
         height = int(resolution.group(2)) if resolution else None
         displays.append(ScrcpyDisplay(int(match.group(1)), description, width, height))

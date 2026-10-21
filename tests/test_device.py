@@ -1,5 +1,21 @@
+import dataclasses
+
+import pytest
+
 from dexonlinux.device import Device, parse_adb_devices, parse_scrcpy_displays
+from dexonlinux.models import AdbDevice, ScrcpyDisplay
 from tests.fakes import FakeRunner
+
+
+def test_models_are_frozen_dataclasses():
+    device = AdbDevice("R58M1234", "device")
+    assert dataclasses.is_dataclass(device) is True
+    assert device.is_authorized is True
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        device.state = "offline"
+
+    display = ScrcpyDisplay(13, "1920x1080", 1920, 1080)
+    assert (display.display_id, display.width, display.height) == (13, 1920, 1080)
 
 
 def test_parse_adb_devices_skips_header_and_daemon_noise():

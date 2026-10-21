@@ -1,26 +1,33 @@
+"""Small data types for ADB and scrcpy discovery."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
 class AdbDevice:
-    def __init__(self, serial, state, description=""):
-        self.serial = serial
-        self.state = state
-        self.description = description
+    serial: str
+    state: str
+    description: str = ""
 
     @property
-    def is_authorized(self):
+    def is_authorized(self) -> bool:
         return self.state == "device"
 
-    def label(self):
+    def label(self) -> str:
         suffix = f" {self.description}" if self.description else ""
         return f"{self.serial} ({self.state}){suffix}"
 
 
+@dataclass(frozen=True)
 class ScrcpyDisplay:
-    def __init__(self, display_id, description="", width=None, height=None):
-        self.display_id = display_id
-        self.description = description
-        self.width = width
-        self.height = height
+    display_id: int
+    description: str = ""
+    width: int | None = None
+    height: int | None = None
 
-    def label(self):
+    def label(self) -> str:
         details = []
         if self.description:
             details.append(self.description)
@@ -32,7 +39,7 @@ class ScrcpyDisplay:
         suffix = f" - {' | '.join(details)}" if details else ""
         return f"display {self.display_id}{suffix}"
 
-    def hint(self):
+    def hint(self) -> str:
         if not self.width or not self.height:
             return ""
         if self.width > self.height:
