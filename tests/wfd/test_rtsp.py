@@ -3,6 +3,7 @@ import threading
 import time
 
 from dexonlinux.wfd.rtsp import (
+    RTSP_PORT,
     Message,
     WfdSink,
     build_request,
@@ -16,6 +17,10 @@ BODY = (
     b"wfd_video_formats: 00 00 03 10 0001ffff 1fffffff 00001fff 00 0000 0000 10 none none\r\n"
     b"wfd_audio_codecs: AAC 00000007 00\r\n"
 )
+
+
+def test_sink_defaults_to_the_wfd_rtsp_port():
+    assert WfdSink("127.0.0.1").port == RTSP_PORT
 
 
 def test_fragmented_response_parses():

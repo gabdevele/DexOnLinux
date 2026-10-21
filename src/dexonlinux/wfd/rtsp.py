@@ -1,9 +1,9 @@
 """Minimal RTSP plumbing for a Wi-Fi Display sink.
 
 Topology (see docs/research/2026-10-20-wfd-sink-without-miraclecast.md): the
-phone is the WFD source and runs the RTSP server on TCP 7236; the laptop is
-the sink and the RTSP client. Only the control path matters here: RTP packets
-are drained and dropped.
+phone is the WFD source and runs the RTSP server; the laptop is the sink and
+the RTSP client. Only the control path matters here: RTP packets are drained
+and dropped.
 """
 
 from __future__ import annotations
@@ -16,7 +16,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-LOG = logging.getLogger("dexonlinux.wfd.rtsp")
+LOG = logging.getLogger(__name__)
+
+RTSP_PORT = 7236
+READ_TIMEOUT = 1.0
+JOIN_TIMEOUT = 2.0
+RTP_BUFFER = 2048
+RECV_CHUNK = 4096
 
 EventCallback = Callable[[str, dict[str, object]], None]
 
@@ -139,7 +145,7 @@ class RtspConnection:
 
             self._sock.settimeout(max(timeout, 0.01))
             try:
-                chunk = self._sock.recv(4096)
+                chunk = self._sock.recv(RECV_CHUNK)
             except socket.timeout:
                 return None
             if not chunk:
@@ -166,14 +172,18 @@ def _parse_parameters(body: str) -> dict[str, str]:
 class WfdSink:
     """Wi-Fi Display sink: connects to the phone's RTSP server and runs M1-M7."""
 
-    # CEA/VESA/HH masks from miraclecast's proven Samsung defaults.
+    # M4 capability payload. wfd_video_formats fields: native (1B),
+    # preferred-display-mode-supported (1B), profiles (0x03 = CBP), levels
+    # (0x10 = level 4.1), CEA / VESA / HH resolution bitmaps (4B each),
+    # latency (1B), min-slice-size (2B), slice-enc-params (2B),
+    # frame-rate-control-support (1B), max-hres (2B), max-vres (2B).
     VIDEO_FORMATS = "00 00 03 10 0001ffff 1fffffff 00001fff 00 0000 0000 10 none none"
-    AUDIO_CODECS = "AAC 00000007 00"
+    AUDIO_CODECS = "AAC 00000007 00"  # LPCM mode bitmap, no AAC modes
 
     def __init__(
         self,
         host: str,
-        port: int = 7236,
+        port: int = RTSP_PORT,
         on_event: EventCallback | None = None,
         connect_timeout: float = 5.0,
     ) -> None:
@@ -227,16 +237,18 @@ class WfdSink:
         self._rtp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._rtp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._rtp_sock.bind(("0.0.0.0", 0))
-        self._rtp_sock.settimeout(1.0)
+        self._rtp_sock.settimeout(READ_TIMEOUT)
         self.rtp_port = int(self._rtp_sock.getsockname()[1])
         self._rtp_thread = threading.Thread(target=self._drain_rtp, daemon=True)
         self._rtp_thread.start()
 
     def _drain_rtp(self) -> None:
-        assert self._rtp_sock is not None
+        sock = self._rtp_sock
+        if sock is None:
+            return
         while not self._stop.is_set():
             try:
-                self._rtp_sock.recvfrom(2048)
+                sock.recvfrom(RTP_BUFFER)
             except socket.timeout:
                 continue
             except OSError:
@@ -245,7 +257,7 @@ class WfdSink:
     def _loop(self) -> None:
         assert self._conn is not None
         while not self._stop.is_set():
-            message = self._conn.read(1.0)
+            message = self._conn.read(READ_TIMEOUT)
             if message is None:
                 continue
             if message.is_request:
@@ -366,14 +378,18 @@ class WfdSink:
         self.on_event("streaming", {"session": self._session})
 
     def _cleanup(self) -> None:
+        # Order matters: set the flag, let the RTP drain exit on its own
+        # timeout, then close the sockets. Closing a socket under a blocked
+        # recv() races the reader and surfaces as EBADF.
         self._stop.set()
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        if self._rtp_thread is not None:
+            if self._rtp_thread is not threading.current_thread():
+                self._rtp_thread.join(timeout=JOIN_TIMEOUT)
+            self._rtp_thread = None
         if self._rtp_sock is not None:
             with contextlib.suppress(OSError):
                 self._rtp_sock.close()
             self._rtp_sock = None
-        if self._rtp_thread is not None:
-            self._rtp_thread.join(timeout=1.0)
-            self._rtp_thread = None
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None

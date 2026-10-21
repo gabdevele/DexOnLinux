@@ -4,27 +4,55 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Callable
+from collections.abc import Callable
+from typing import Protocol
 
+from dexonlinux.helper.client import HelperEvent
 from dexonlinux.p2p.base import P2PError, P2PRole
 
 LOG = logging.getLogger(__name__)
-SinkFactory = Callable[[str], object]
+
+
+class HelperLike(Protocol):
+    def wait_for(self, kind: str, timeout: float) -> HelperEvent: ...
+
+    def stop(self) -> None: ...
+
+
+class ScrcpyLike(Protocol):
+    def start(self) -> object: ...
+
+    def wait(self) -> None: ...
+
+    def stop(self) -> None: ...
+
+
+class SinkLike(Protocol):
+    on_event: Callable[[str, dict[str, object]], None]
+
+    def run(self) -> None: ...
+
+    def stop(self) -> None: ...
+
+
+SinkFactory = Callable[[str], SinkLike]
 
 
 class DexSession:
     def __init__(
         self,
-        helper,
-        scrcpy,
+        helper: HelperLike,
+        scrcpy: ScrcpyLike,
         sink_factory: SinkFactory,
         start_delay: float = 1.0,
     ) -> None:
         self._helper = helper
         self._scrcpy = scrcpy
         self._sink_factory = sink_factory
+        # scrcpy lists displays right after the stream starts; the source
+        # needs a moment before the DeX display appears in that list.
         self._start_delay = start_delay
-        self._sink = None
+        self._sink: SinkLike | None = None
         self._timer: threading.Timer | None = None
         self._monitor: threading.Thread | None = None
         self._scrcpy_started = False

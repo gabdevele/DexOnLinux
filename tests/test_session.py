@@ -19,15 +19,17 @@ def group_info(**overrides):
 
 
 class FakeHelper:
-    def __init__(self, group=None, error=None):
+    def __init__(self, group=None, error=None, raw=None):
         self.group = group
         self.error = error
+        self.raw = raw
         self.stopped = False
 
     def wait_for(self, kind, timeout):
         if self.error:
             raise self.error
-        return HelperEvent(kind, self.group.__dict__)
+        data = self.raw if self.raw is not None else self.group.__dict__
+        return HelperEvent(kind, data)
 
     def stop(self):
         self.stopped = True
@@ -128,6 +130,24 @@ def test_go_role_uses_peer_ip_for_rtsp():
 
 def test_client_role_without_peer_ip_is_rejected():
     helper = FakeHelper(group_info(peer_ip=None))
+    session = DexSession(helper, FakeScrcpy(), lambda host: FakeSink())
+    assert session.run() == 1
+    assert helper.stopped is True
+
+
+def test_old_helper_group_keys_are_rejected():
+    # A helper from an older install emits client_ip/go_ip instead of
+    # local_ip/peer_ip: the session must refuse it instead of unpacking junk.
+    helper = FakeHelper(raw={"ifname": "p2p-test", "role": "client", "go_ip": "192.168.49.1"})
+    hosts = []
+    session = DexSession(helper, FakeScrcpy(), lambda host: hosts.append(host) or FakeSink())
+    assert session.run() == 1
+    assert hosts == []
+    assert helper.stopped is True
+
+
+def test_unknown_helper_role_is_rejected():
+    helper = FakeHelper(raw={"ifname": "p2p-test", "role": "GO", "peer_ip": "192.168.49.2"})
     session = DexSession(helper, FakeScrcpy(), lambda host: FakeSink())
     assert session.run() == 1
     assert helper.stopped is True
