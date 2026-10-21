@@ -1,5 +1,10 @@
 # tests/p2p/test_wfd.py
-from dexonlinux.p2p.wfd import WfdConfigurator, WfdState
+from dexonlinux.p2p.wfd import WfdConfigurator, WfdState, build_device_info_ie
+
+
+def test_build_device_info_ie_encodes_the_session_port():
+    assert build_device_info_ie() == "00000600111c4400c8"
+    assert build_device_info_ie(session_port=9000) == "0000060011232800c8"
 
 
 class FakeCtrl:

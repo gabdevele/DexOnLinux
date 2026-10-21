@@ -3,14 +3,33 @@
 from __future__ import annotations
 
 import logging
+import struct
 from dataclasses import dataclass
 
 from dexonlinux.p2p.base import P2PError
 
 LOG = logging.getLogger(__name__)
 
-# Device Info: primary sink + session available; RTSP 7236; 100 Mbps.
-WFD_IES = "00000600111c4400c8"
+WFD_SESSION_PORT = 7236
+_DEVICE_INFORMATION = 0x0011  # primary sink, session available
+_MAX_THROUGHPUT = 0x00C8  # units of 0.5 Mbps
+
+
+def build_device_info_ie(
+    device_information: int = _DEVICE_INFORMATION,
+    session_port: int = WFD_SESSION_PORT,
+    max_throughput: int = _MAX_THROUGHPUT,
+) -> str:
+    """Encode the WFD Device Information subelement as a hex string.
+
+    Layout: ``[id u8][length u16 BE][device info u16][RTSP port u16][max
+    throughput u16]``.
+    """
+    value = struct.pack("!HHH", device_information, session_port, max_throughput)
+    return "00" + "0006" + value.hex()
+
+
+WFD_IES = build_device_info_ie()
 
 
 @dataclass(frozen=True)

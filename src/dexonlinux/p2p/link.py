@@ -1,8 +1,9 @@
 """P2P group link setup.
 
-iwlwifi/mac80211 deauthenticates a P2P client if its netdev is brought up only
-after association. A short, bounded watcher raises the group netdev while GO
-negotiation is in progress; the address is added only after GROUP-STARTED.
+Association happens while the group netdev is still down. Some drivers drop
+the client if the netdev is brought up only after association, so a short
+bounded watcher raises it during GO negotiation; the address is added only
+after GROUP-STARTED.
 """
 
 from __future__ import annotations
@@ -15,7 +16,6 @@ import time
 from dexonlinux.system import Runner
 
 LOG = logging.getLogger(__name__)
-CLIENT_CIDR = "192.168.49.200/24"
 
 
 class LinkConfigurator:
@@ -33,7 +33,8 @@ class LinkConfigurator:
         self._thread: threading.Thread | None = None
 
     def configure(self, ifname: str, cidr: str) -> None:
-        # The watcher owns IFF_UP; changing it here deauthenticates iwlwifi.
+        # Do not touch IFF_UP here: the watcher owns it, and toggling the link
+        # after association can make some drivers drop the client.
         self._runner.run(["ip", "addr", "replace", cidr, "dev", ifname])
 
     def remove(self, ifname: str) -> None:
