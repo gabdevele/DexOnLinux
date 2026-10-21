@@ -154,8 +154,9 @@ def confirm_session(report: StackReport, skip: bool) -> None:
         return
     if report.suspend_nm:
         message = (
-            "DexOnLinux will temporarily pause NetworkManager while the P2P group is active. "
-            "Wi-Fi internet stays connected. Continue?"
+            "DexOnLinux will expose the laptop as a Wi-Fi Direct GO, serve the phone "
+            "a DHCP lease and pause NetworkManager during the P2P session. "
+            "The Wi-Fi connection to your network stays active. Continue?"
         )
     else:
         message = "DexOnLinux will create a Wi-Fi Direct P2P group. Continue?"
@@ -197,6 +198,7 @@ def run(args: argparse.Namespace) -> int:
         interface,
         backend="direct",
         suspend_nm=report.suspend_nm,
+        p2p_go=True,
         sudo_password=sudo_password,
     )
     try:

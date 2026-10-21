@@ -34,12 +34,18 @@ class DexSession:
         try:
             event = self._helper.wait_for("group_started", timeout=120.0)
             data = event.data
-            if data.get("role") != "client":
-                raise P2PError("P2P group is not in client role")
-            go_ip = data.get("go_ip")
-            if not go_ip:
-                raise P2PError("P2P group has no GO address")
-            sink = self._sink_factory(str(go_ip))
+            role = data.get("role")
+            if role == "client":
+                host = data.get("go_ip")
+                if not host:
+                    raise P2PError("P2P group has no GO address")
+            elif role == "GO":
+                host = data.get("peer_ip")
+                if not host:
+                    raise P2PError("P2P GO group has no peer address")
+            else:
+                raise P2PError("P2P group has an unknown role")
+            sink = self._sink_factory(str(host))
             self._sink = sink
             sink.on_event = self._on_sink_event
             sink.run()

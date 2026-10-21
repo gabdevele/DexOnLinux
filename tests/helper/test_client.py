@@ -3,8 +3,15 @@ from pathlib import Path
 
 import pytest
 
-from dexonlinux.helper.client import HelperClient
+from dexonlinux.helper.client import HelperClient, _helper_command
 from dexonlinux.p2p.base import P2PError
+
+
+def test_helper_command_uses_go_and_suspend_flags():
+    command = _helper_command("wlp-test", "direct", suspend_nm=True, p2p_go=True, sudo_password="x")
+    assert command[:3] == ["sudo", "-S", "-p"]
+    assert command[-2:] == ["--suspend-nm", "--p2p-go"]
+    assert "--interface" in command and "wlp-test" in command
 
 
 def test_client_reads_events_and_stops():

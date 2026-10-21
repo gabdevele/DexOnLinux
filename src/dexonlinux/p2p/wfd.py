@@ -22,6 +22,9 @@ class WfdState:
 
 
 class WfdConfigurator:
+    def __init__(self, go_intent: int = 0) -> None:
+        self._go_intent = go_intent
+
     def apply(self, ctrl, device_name: str = "DexOnLinux") -> WfdState:
         state = WfdState(
             wifi_display=self._get(ctrl, "GET wifi_display", "0"),
@@ -34,7 +37,7 @@ class WfdConfigurator:
         # is false, so enable WFD first.
         self._send(ctrl, "SET wifi_display 1", required=True)
         self._send(ctrl, f"WFD_SUBELEM_SET all {WFD_IES}", required=True)
-        self._send(ctrl, "SET p2p_go_intent 0")
+        self._send(ctrl, f"SET p2p_go_intent {self._go_intent}")
         self._send(ctrl, f"SET device_name {device_name}")
         self._send(ctrl, "SET config_methods 0x80", required=True)
         return state

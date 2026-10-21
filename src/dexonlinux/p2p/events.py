@@ -19,6 +19,8 @@ _IP_ADDR = re.compile(r"\bip_addr=([^\s\]]+)")
 _IP_MASK = re.compile(r"\bip_mask=([^\s\]]+)")
 _GO_IP = re.compile(r"\bgo_ip_addr=([^\s\]]+)")
 _GO_DEV = re.compile(r"\bgo_dev_addr=([^\s\]]+)")
+_PEER_DEV = re.compile(r"\bpeer_dev=([^\s]+)")
+_PEER_IFACE = re.compile(r"\bpeer_iface=([^\s]+)")
 
 
 class EventKind(Enum):
@@ -114,7 +116,7 @@ def parse_event(line: str) -> P2PEvent | None:
             return None
         return P2PEvent(EventKind.INVITATION, peer=Peer(mac=mac), raw=line)
 
-    if line.startswith(("P2P-GO-NEG-REQUEST ", "P2P-GO-NEG-SUCCESS ")):
+    if line.startswith("P2P-GO-NEG-REQUEST "):
         mac = _mac_at(parts)
         if mac is None:
             return None
@@ -122,6 +124,18 @@ def parse_event(line: str) -> P2PEvent | None:
         return P2PEvent(
             EventKind.GO_NEGOTIATION,
             peer=Peer(mac=mac),
+            passwd_id=int(passwd_match.group(1)) if passwd_match else None,
+            raw=line,
+        )
+
+    if line.startswith("P2P-GO-NEG-SUCCESS "):
+        peer_match = _PEER_IFACE.search(line) or _PEER_DEV.search(line)
+        if peer_match is None:
+            return None
+        passwd_match = _PASSWD_ID.search(line)
+        return P2PEvent(
+            EventKind.GO_NEGOTIATION,
+            peer=Peer(mac=peer_match.group(1)),
             passwd_id=int(passwd_match.group(1)) if passwd_match else None,
             raw=line,
         )

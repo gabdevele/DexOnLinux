@@ -47,19 +47,12 @@ class HelperClient:
         backend: str = "direct",
         command: Sequence[str] | None = None,
         suspend_nm: bool = False,
+        p2p_go: bool = False,
         sudo_password: str | None = None,
     ) -> HelperClient:
         provided_command = command is not None
         if command is None:
-            executable = shutil.which("dexonlinux-linkd")
-            if executable:
-                command = [executable]
-            else:
-                command = [sys.executable, "-m", "dexonlinux.helper"]
-            sudo = ["sudo", "-S", "-p", ""] if sudo_password is not None else ["sudo", "-n"]
-            command = [*sudo, *command, "--interface", interface, "--backend", backend]
-            if suspend_nm:
-                command.append("--suspend-nm")
+            command = _helper_command(interface, backend, suspend_nm, p2p_go, sudo_password)
 
         process = subprocess.Popen(
             list(command),
@@ -130,6 +123,27 @@ class HelperClient:
         for stream in (self.process.stdout, self.process.stderr):
             if stream is not None:
                 stream.close()
+
+def _helper_command(
+    interface: str,
+    backend: str,
+    suspend_nm: bool,
+    p2p_go: bool,
+    sudo_password: str | None,
+) -> list[str]:
+    executable = shutil.which("dexonlinux-linkd")
+    if executable:
+        command = [executable]
+    else:
+        command = [sys.executable, "-m", "dexonlinux.helper"]
+    sudo = ["sudo", "-S", "-p", ""] if sudo_password is not None else ["sudo", "-n"]
+    command = [*sudo, *command, "--interface", interface, "--backend", backend]
+    if suspend_nm:
+        command.append("--suspend-nm")
+    if p2p_go:
+        command.append("--p2p-go")
+    return command
+
 
 def _read_stdout(stream, events: queue.Queue[HelperEvent]) -> None:
     if stream is None:

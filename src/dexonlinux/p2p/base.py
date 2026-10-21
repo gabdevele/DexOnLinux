@@ -23,6 +23,7 @@ class GroupInfo:
     go_ip: str | None
     peer_mac: str
     frequency: int | None
+    peer_ip: str | None = None
 
 
 class P2PError(RuntimeError):

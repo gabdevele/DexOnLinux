@@ -26,6 +26,17 @@ def test_parses_go_negotiation_password_id():
     assert event.passwd_id == 4
 
 
+def test_parses_go_negotiation_success_without_leading_mac():
+    event = parse_event(
+        "P2P-GO-NEG-SUCCESS role=client freq=2437 ht40=0 "
+        "peer_dev=ce:f9:f0:2b:8a:cc peer_iface=ce:f9:f0:2b:0a:cc wps_method=PBC"
+    )
+    assert event.kind is EventKind.GO_NEGOTIATION
+    assert event.peer.mac == "ce:f9:f0:2b:0a:cc"
+    assert event.passwd_id is None
+    assert event.raw.startswith("P2P-GO-NEG-SUCCESS")
+
+
 def test_parses_invitation_as_actionable_failure():
     event = parse_event(
         "P2P-INVITATION-RECEIVED ce:f9:f0:2b:8a:cc sa=ce:f9:f0:2b:8a:cc persistent=1"

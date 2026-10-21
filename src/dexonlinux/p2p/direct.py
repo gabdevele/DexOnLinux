@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import replace
 
 from dexonlinux.p2p.base import GroupInfo, P2PError
 from dexonlinux.p2p.events import EventKind, parse_event
@@ -21,6 +22,8 @@ class DirectBackend:
         wfd,
         link,
         frequency: int = 2437,
+        go_intent: int = 0,
+        dhcp=None,
         before_group: Callable[[], None] | None = None,
     ) -> None:
         self.interface = interface
@@ -28,12 +31,15 @@ class DirectBackend:
         self._wfd = wfd
         self._link = link
         self._frequency = frequency
+        self._go_intent = go_intent
+        self._dhcp = dhcp
         self._before_group = before_group
         self._before_group_done = False
         self._state = None
         self.group_ifname: str | None = None
         self._pending_peer: str | None = None
         self._pending_until = 0.0
+        self._preup_started = False
 
     def prepare(self) -> None:
         self._ctrl.open()
@@ -62,7 +68,12 @@ class DirectBackend:
                 elif event.kind is EventKind.GO_NEGOTIATION:
                     if event.passwd_id is not None and event.passwd_id != 4:
                         raise P2PError("phone requested a non-PBC WPS method; PBC is required")
-                    if event.peer is not None and not self._connect_pending():
+                    if event.raw.startswith("P2P-GO-NEG-SUCCESS "):
+                        # The group netdev appears during GO negotiation. Bring it
+                        # up after the negotiation has settled but before auth;
+                        # doing it earlier exposes an iwlwifi link-config race.
+                        self._start_preup()
+                    elif event.peer is not None and not self._connect_pending():
                         self._send_connect(event.peer.mac)
                 elif event.kind is EventKind.GROUP_STARTED:
                     return self._group_started(event.group)
@@ -81,8 +92,18 @@ class DirectBackend:
             raise P2PError("malformed P2P group event")
         self.group_ifname = group.ifname
         self._pending_until = 0.0
-        if group.role != "client":
-            raise P2PError("phone negotiated the laptop as GO; client role required")
+        if group.role == "GO":
+            if self._go_intent == 0:
+                raise P2PError("phone negotiated the laptop as GO; client role required")
+            local_ip = group.client_ip or "192.168.49.1"
+            prefix = group.client_prefix if group.client_ip else 24
+            self._link.configure(group.ifname, f"{local_ip}/{prefix}")
+            peer_ip = "192.168.49.2"
+            if self._dhcp is not None:
+                self._dhcp.start(group.ifname)
+                peer_ip = self._dhcp.peer_ip
+            LOG.info("P2P GO %s up with %s/%d, peer lease %s", group.ifname, local_ip, prefix, peer_ip)
+            return replace(group, client_ip=local_ip, peer_ip=peer_ip)
         if not group.client_ip:
             raise P2PError("group started without a WPS client address; DHCP fallback is not implemented in v1")
         self._link.configure(group.ifname, f"{group.client_ip}/{group.client_prefix}")
@@ -101,9 +122,14 @@ class DirectBackend:
             self._before_group_done = True
         self._pending_peer = mac
         self._pending_until = time.monotonic() + 60.0
-        self._ctrl.command(f"P2P_CONNECT {mac} pbc freq={self._frequency} go_intent=0")
-        # The group netdev appears during GO negotiation. Set it up now;
-        # doing so after association makes iwlwifi deauthenticate the client.
+        self._ctrl.command(f"P2P_CONNECT {mac} pbc freq={self._frequency} go_intent={self._go_intent}")
+
+    def _start_preup(self) -> None:
+        if self._preup_started:
+            return
+        self._preup_started = True
+        # Set the group netdev up after GO negotiation and before association;
+        # doing it as soon as the netdev appears can race iwlwifi's link setup.
         self._link.start_watcher()
 
     def _connect_pending(self) -> bool:
@@ -113,6 +139,8 @@ class DirectBackend:
         group = self.group_ifname
         try:
             self._link.stop_watcher()
+            if self._dhcp is not None:
+                self._dhcp.stop()
             if group:
                 self._ctrl.command(f"P2P_GROUP_REMOVE {group}")
                 try:

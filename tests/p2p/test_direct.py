@@ -90,6 +90,10 @@ def test_pbc_request_starts_client_connect_and_returns_group():
     ctrl = FakeCtrl(
         events=[
             "P2P-PROV-DISC-PBC-REQ ce:f9:f0:2b:8a:cc",
+            (
+                "P2P-GO-NEG-SUCCESS role=client freq=2437 peer_dev=ce:f9:f0:2b:8a:cc "
+                "peer_iface=ce:f9:f0:2b:0a:cc wps_method=PBC"
+            ),
             group_event(),
         ]
     )
@@ -101,6 +105,27 @@ def test_pbc_request_starts_client_connect_and_returns_group():
     assert link.configured == [("p2p-wlp0s20-7", "192.168.49.200/24")]
     assert group.role == "client"
     assert group.go_ip == "192.168.49.1"
+
+
+def test_preup_waits_for_go_negotiation_success():
+    ctrl = FakeCtrl(
+        events=[
+            "P2P-PROV-DISC-PBC-REQ ce:f9:f0:2b:8a:cc",
+            (
+                "P2P-GO-NEG-SUCCESS role=client freq=2437 peer_dev=ce:f9:f0:2b:8a:cc "
+                "peer_iface=ce:f9:f0:2b:0a:cc wps_method=PBC"
+            ),
+            group_event(),
+        ]
+    )
+    link = FakeLink()
+    backend = DirectBackend("wlp0s20f3", ctrl, FakeWfd(), link)
+
+    backend._send_connect("ce:f9:f0:2b:8a:cc")
+    assert link.watcher_started is False
+
+    backend.connect(stop=threading.Event(), timeout=1.0)
+    assert link.watcher_started is True
 
 
 def test_before_group_hook_runs_once_before_p2p_connect():
@@ -125,6 +150,41 @@ def test_go_role_is_rejected():
     backend = DirectBackend("wlp0s20f3", FakeCtrl(events=[group_event(role="GO")]), FakeWfd(), FakeLink())
     with pytest.raises(P2PError, match="client"):
         backend.connect(stop=threading.Event(), timeout=1.0)
+
+
+class FakeDhcp:
+    def __init__(self):
+        self.started = []
+        self.stopped = False
+        self.peer_ip = "192.168.49.2"
+
+    def start(self, interface):
+        self.started.append(interface)
+
+    def stop(self):
+        self.stopped = True
+
+
+def test_go_role_is_accepted_when_requested():
+    ctrl = FakeCtrl(
+        events=[
+            "P2P-PROV-DISC-PBC-REQ ce:f9:f0:2b:8a:cc",
+            (
+                "P2P-GO-NEG-SUCCESS role=GO freq=2437 peer_dev=ce:f9:f0:2b:8a:cc "
+                "peer_iface=ce:f9:f0:2b:0a:cc wps_method=PBC"
+            ),
+            group_event(role="GO", client_ip="192.168.49.1"),
+        ]
+    )
+    link = FakeLink()
+    dhcp = FakeDhcp()
+    backend = DirectBackend("wlp0s20f3", ctrl, FakeWfd(), link, go_intent=15, dhcp=dhcp)
+    group = backend.connect(stop=threading.Event(), timeout=1.0)
+    assert group.role == "GO"
+    assert group.peer_ip == "192.168.49.2"
+    assert "P2P_CONNECT ce:f9:f0:2b:8a:cc pbc freq=2437 go_intent=15" in ctrl.commands
+    assert link.configured == [("p2p-wlp0s20-7", "192.168.49.1/24")]
+    assert dhcp.started == ["p2p-wlp0s20-7"]
 
 
 def test_pin_request_is_rejected_with_actionable_message():
