@@ -1,14 +1,14 @@
 """Session-scoped NetworkManager suspension.
 
-On the tested Intel AX201 + NetworkManager 1.46 setup, NetworkManager removes
-an externally created P2P group immediately after ``P2P-GROUP-STARTED``. The
-direct backend works reliably when NetworkManager is stopped. Stopping or
-restarting NetworkManager is not acceptable, so we freeze it with SIGSTOP for
-the duration of the P2P group and resume it on every exit path.
+NetworkManager owns the P2P device and removes P2P groups it did not create,
+so an externally created group cannot outlive it. Stopping or restarting
+NetworkManager is not acceptable, so it is frozen with SIGSTOP for the P2P
+session and resumed on every exit path. SIGSTOP keeps the established station
+connection and wpa_supplicant running, so Wi-Fi internet stays usable.
 
-A separate watchdog process resumes NetworkManager if the helper is killed
-before it can clean up. SIGSTOP keeps the established station connection and
-wpa_supplicant running, so Wi-Fi internet remains usable.
+Observed with NetworkManager 1.46 (live evidence in
+``docs/research/2026-10-21-live-acceptance.md``). A separate watchdog process
+resumes NetworkManager if the helper is killed before it can clean up.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import TracebackType
 
 LOG = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ class NetworkManagerSuspension:
         self._interval = interval
         self._pid: int | None = None
         self._watchdog: subprocess.Popen[bytes] | None = None
+        self._atexit_registered = False
 
     @property
     def suspended(self) -> bool:
@@ -94,7 +96,7 @@ class NetworkManagerSuspension:
             raise NetworkManagerError(f"could not suspend NetworkManager: {exc}") from exc
 
         self._pid = pid
-        atexit.register(self.resume)
+        self._register_atexit()
         LOG.info("suspended NetworkManager (pid %d) for the P2P session", pid)
 
     def resume(self) -> None:
@@ -111,16 +113,36 @@ class NetworkManagerSuspension:
         except OSError as exc:
             LOG.warning("could not resume NetworkManager: %s", exc)
         finally:
+            self._unregister_atexit()
             self._stop_watchdog()
             LOG.info("resumed NetworkManager (pid %d)", pid)
 
-    def __enter__(self):
+    def __enter__(self) -> NetworkManagerSuspension:
         self.suspend()
         return self
 
-    def __exit__(self, exc_type, exc, traceback) -> bool:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool:
         self.resume()
         return False
+
+    def _register_atexit(self) -> None:
+        # Register once per process: repeated suspend/resume cycles must not
+        # stack exit handlers.
+        if self._atexit_registered:
+            return
+        atexit.register(self.resume)
+        self._atexit_registered = True
+
+    def _unregister_atexit(self) -> None:
+        if not self._atexit_registered:
+            return
+        atexit.unregister(self.resume)
+        self._atexit_registered = False
 
     def _stop_watchdog(self) -> None:
         watchdog = self._watchdog

@@ -119,3 +119,29 @@ def test_suspension_refuses_a_non_network_manager_pid(fake_nm, monkeypatch):
 
     assert kills == []
     assert watchdogs == []
+
+
+def test_suspension_registers_atexit_once_and_unregisters_on_resume(fake_nm, monkeypatch):
+    _state, _kills, _watchdogs = fake_nm
+    registered = []
+    monkeypatch.setattr(nm.atexit, "register", registered.append)
+    monkeypatch.setattr(nm.atexit, "unregister", registered.remove)
+    suspension = NetworkManagerSuspension(enabled=True)
+
+    suspension.suspend()
+    suspension.resume()
+    suspension.suspend()
+    suspension.resume()
+
+    assert registered == []
+
+
+def test_suspension_resume_without_suspend_is_a_noop(fake_nm):
+    _state, kills, watchdogs = fake_nm
+    suspension = NetworkManagerSuspension(enabled=True)
+
+    suspension.resume()
+    suspension.resume()
+
+    assert kills == []
+    assert watchdogs == []

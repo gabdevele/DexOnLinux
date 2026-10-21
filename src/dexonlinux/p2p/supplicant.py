@@ -19,6 +19,8 @@ LOG = logging.getLogger(__name__)
 
 CTRL_DIR = Path("/run/wpa_supplicant")
 IFNAMSIZ = 16
+DEFAULT_TIMEOUT = 2.0
+MAX_REPLY_BYTES = 4096
 _PRIORITY = re.compile(r"^<\d+>")
 
 
@@ -82,7 +84,7 @@ class SupplicantControl:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
         sock.bind(f"\0dexonlinux-{os.getpid()}-{id(sock)}")
         sock.connect(str(self.path))
-        sock.settimeout(2.0)
+        sock.settimeout(DEFAULT_TIMEOUT)
         self._sock = sock
         reply = self.command("ATTACH")
         if reply.strip() != "OK":
@@ -97,7 +99,7 @@ class SupplicantControl:
             finally:
                 self._sock = None
 
-    def command(self, command: str, timeout: float = 2.0) -> str:
+    def command(self, command: str, timeout: float = DEFAULT_TIMEOUT) -> str:
         if self._sock is None:
             raise SupplicantError("control connection is not open")
         self._sock.send(command.encode("utf-8"))
@@ -139,7 +141,7 @@ class SupplicantControl:
             return None
         self._sock.settimeout(max(0.01, timeout))
         try:
-            return self._sock.recv(4096)
+            return self._sock.recv(MAX_REPLY_BYTES)
         except socket.timeout:
             return None
         except OSError as exc:
