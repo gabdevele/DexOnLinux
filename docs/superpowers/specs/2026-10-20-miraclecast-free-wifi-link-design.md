@@ -2,6 +2,16 @@
 
 Date: 2026-10-20 · Status: draft, pending approval
 
+> **Implementation amendment (2026-10-21):** Gate 0 rejected NM-owned P2P
+> (5 GHz AX201 firmware crash) and no runtime detach worked without a reboot.
+> The accepted implementation uses the direct wpa_supplicant P2P client backend
+> with a session-scoped NetworkManager `SIGSTOP`/`SIGCONT`, plus a crash
+> watchdog. The product does not stop or restart NetworkManager or
+> wpa_supplicant, and the station Wi-Fi/internet stay usable. The NM-owned
+> primary path and the PIN fallback described below are superseded. See
+> `docs/research/2026-10-21-nm-p2p-probe.md` and
+> `docs/research/2026-10-21-live-acceptance.md`.
+
 Companion research (all factual claims referenced below live there, with primary sources):
 [`docs/research/2026-10-20-wfd-sink-without-miraclecast.md`](../../research/2026-10-20-wfd-sink-without-miraclecast.md).
 

@@ -2,47 +2,61 @@
 
 # DexOnLinux
 
-DexOnLinux streams Samsung DeX to a Linux desktop and lets you control it with your mouse and keyboard through scrcpy.
+DexOnLinux starts Samsung DeX on a Linux desktop over Wi-Fi Direct and opens the
+DeX desktop with scrcpy. It replaces the old Miraclecast path with a small
+stdlib-first Wi-Fi Display sink.
+
+## What it does
+
+- The phone is the Wi-Fi Direct group owner (GO); the laptop is the client.
+- The laptop advertises a Wi-Fi Display sink and uses PBC (no PIN).
+- A minimal RTSP client performs the WFD handshake; scrcpy shows the DeX desktop
+  over USB/adb.
+- The existing Wi-Fi connection stays usable. NetworkManager is paused with
+  `SIGSTOP` only while the P2P group is being created and is resumed
+  automatically when the session ends. wpa_supplicant is never stopped,
+  restarted or replaced.
+- A watchdog resumes NetworkManager even if the helper crashes.
+
+No reboot, no private supplicant, no Miraclecast.
+
+## Requirements
+
+- Python 3.9 or newer
+- a Wi-Fi adapter and driver with P2P client/GO support
+- NetworkManager + wpa_supplicant (tested on Ubuntu 24.04, NetworkManager 1.46,
+  Intel AX201; standalone wpa_supplicant is also supported)
+- `iw`, `ip`, `adb`, `scrcpy`, `sudo`
+- Debian/Ubuntu, Arch, or Fedora
+
+NetworkManager + iwd and ConnMan are not supported in v1. The doctor reports
+them before doing anything.
 
 ## Installation
 
-DexOnLinux is available on PyPI.
-
-Recommended:
+From PyPI:
 
 ```bash
 uv tool install dexonlinux
+dexonlinux --doctor
 dexonlinux
 ```
 
-Fallback:
+Or with a virtual environment:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install dexonlinux
+dexonlinux --doctor
 dexonlinux
 ```
 
-## Requirements
+### Dependency helper
 
-DexOnLinux needs:
-
-- Python 3.9 or newer
-- Miraclecast (`miracle-wifid`, `miracle-sinkctl`)
-- scrcpy
-- adb
-- a Wi-Fi adapter with P2P support
-- NetworkManager with `nmcli`
-- sudo access for Wi-Fi Direct setup
-
-The project is currently tested on Ubuntu 24.04.
-
-## Ubuntu 24.04 dependency helper
-
-The helper script installs the system dependencies used by DexOnLinux and installs the PyPI package. It uses `uv tool install` when uv is available. If uv is not installed, it creates `.venv` and installs DexOnLinux there with pip.
-
-Do not run the script with `sudo`; it will ask for sudo only when system packages need to be installed.
+The repository installer detects Debian/Ubuntu, Arch and Fedora, installs the
+system dependencies, and installs the package with `uv` when available. Do not
+run it as root; it asks for sudo only for system packages.
 
 ```bash
 git clone https://github.com/gabdevele/DexOnLinux.git
@@ -51,95 +65,74 @@ chmod +x ./scripts/install.sh
 ./scripts/install.sh
 ```
 
-If uv is available, run:
-
-```bash
-dexonlinux
-```
-
-If the script used the pip fallback, run:
-
-```bash
-source .venv/bin/activate
-dexonlinux
-```
-
-## Other Linux distributions
-
-Install Miraclecast and scrcpy using your distribution packages or their upstream instructions:
-
-- [Miraclecast build instructions](https://github.com/albfan/miraclecast/wiki/Building)
-- [scrcpy installation instructions](https://github.com/Genymobile/scrcpy/blob/master/README.md#installation)
-
-Then install DexOnLinux from PyPI:
-
-```bash
-uv tool install dexonlinux
-dexonlinux
-```
-
-or:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install dexonlinux
-dexonlinux
-```
+Install `adb` and `scrcpy` from your distribution. `scrcpy` must be new enough
+to support `--list-displays`; otherwise install it from the upstream release.
 
 ## Usage
 
-Run:
-
 ```bash
+dexonlinux --doctor
 dexonlinux
-```
-
-Useful options:
-
-```bash
-dexonlinux --help
 dexonlinux --interface wlan0 --device R5CN1234567
-dexonlinux --network-mode auto
-dexonlinux --network-mode scoped
-dexonlinux --network-mode full-stop
-dexonlinux --fullscreen
 dexonlinux --display-id 2
+dexonlinux --fullscreen
 dexonlinux --debug --log-file dexonlinux.log
 dexonlinux --no-banner --no-color
 ```
 
-By default, DexOnLinux uses `--network-mode auto`.
+`dexonlinux --doctor` is read-only and prints the detected network stack, the
+selected P2P backend, whether NetworkManager will be paused, and any reasons the
+host is unsupported.
 
-In auto mode, DexOnLinux checks the selected Wi-Fi interface against the current default route:
+On the phone:
 
-- if that Wi-Fi interface is the only default route, DexOnLinux uses `full-stop`
-- if another default route is available, DexOnLinux uses `scoped`
-
-This keeps the common single-Wi-Fi setup simple and reliable. Miraclecast needs direct control of Wi-Fi Direct/P2P, so if your internet connection uses the same Wi-Fi adapter, it will go offline until DexOnLinux exits.
-
-`full-stop` stops both NetworkManager and `wpa_supplicant` while the session is running. This is the most reliable mode for single-adapter systems.
-
-`scoped` keeps NetworkManager running, releases the selected Wi-Fi interface, and stops `wpa_supplicant`. It can preserve internet through Ethernet, USB tethering, or another network path that does not depend on `wpa_supplicant`.
+1. Open Smart View / DeX.
+2. Keep the phone unlocked and select `DexOnLinux`.
+3. The connection uses Wi-Fi Direct PBC; there is no PIN prompt.
+4. If the phone shows `DexOnLinux` as previously connected, forget it and retry.
 
 ## How it works
 
-DexOnLinux uses:
+The privileged helper owns only the P2P device through the system
+wpa_supplicant control socket:
 
-- Miraclecast for the Wi-Fi Direct sink
-- scrcpy for display and input control
-- adb to select the Android device
-- miracle-sinkctl output to detect DeX connection, disconnection, and stream resolution
+1. It configures the WFD information elements and listens for PBC.
+2. Immediately before `P2P_CONNECT`, it sends `SIGSTOP` to NetworkManager.
+   This prevents NetworkManager from removing an externally created P2P group.
+3. It connects with `freq=2437`, pre-ups the group interface during GO
+   negotiation, and adds `192.168.49.200/24` only after `P2P-GROUP-STARTED`.
+4. The user process runs the RTSP sink and starts scrcpy when streaming begins.
+5. On exit, Ctrl-C or a crash, the helper removes the group and sends
+   `SIGCONT`; a separate watchdog also resumes NetworkManager if the helper dies.
 
-On exit, Ctrl+C, or startup failure, DexOnLinux stops the Miraclecast processes it started and restores the network state it changed.
+The station Wi-Fi and its routes are not modified, so internet stays available.
 
-## Development setup
+## Troubleshooting
+
+- `dexonlinux --doctor` reports `Supported: no`: fix every listed reason before
+  starting a session.
+- `NM + iwd` or ConnMan: switch to NetworkManager with wpa_supplicant (v1 does
+  not implement iwd/ConnMan P2P).
+- No P2P control socket: enable Wi-Fi and Wi-Fi Direct; make sure
+  wpa_supplicant is running under NetworkManager.
+- Phone shows `DexOnLinux` as previously connected: forget the device in Smart
+  View and retry.
+- Wrong display: reconnect DeX and choose the display marked as likely DeX, or
+  pass `--display-id`.
+- Verify internet during a session with `ping -c 3 1.1.1.1`; it should stay at
+  0% loss.
+- If a session is interrupted and NetworkManager looks unresponsive, wait for
+  the watchdog or run `sudo kill -CONT $(pidof NetworkManager)`.
+
+## Development
 
 ```bash
 git clone https://github.com/gabdevele/DexOnLinux.git
 cd DexOnLinux
 uv sync --group dev --locked
 uv run dexonlinux --help
+uv run pytest -q
+uv run ruff check src tests
 ```
 
 Build and check the package:
@@ -149,9 +142,5 @@ uv run --only-group dev python -m build
 uv run --only-group dev python -m twine check dist/*
 ```
 
-## Troubleshooting
-
-- `unauthorized` adb device: accept the USB debugging prompt on the phone.
-- `offline` adb device: reconnect USB, then run `adb kill-server && adb start-server`.
-- Wrong display: reconnect DeX and choose the display marked as likely DeX, or pass `--display-id`.
-- Network not restored: run `sudo systemctl start NetworkManager wpa_supplicant`, or reconnect the Wi-Fi interface from NetworkManager.
+The `spike/` directory is the reference implementation used during research; the
+product code is under `src/dexonlinux/`.

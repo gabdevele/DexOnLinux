@@ -40,9 +40,3 @@ class ScrcpyDisplay:
         if self.height > self.width:
             return "likely phone screen"
         return ""
-
-
-class SinkctlEvent:
-    def __init__(self, name, **data):
-        self.name = name
-        self.data = data

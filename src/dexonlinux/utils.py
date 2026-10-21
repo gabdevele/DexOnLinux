@@ -1,5 +1,7 @@
 import logging
 from pathlib import Path
+from typing import ClassVar
+
 from colorama import Fore, Style
 
 COLOR_ENABLED = True
@@ -19,7 +21,7 @@ class CustomFormatter(logging.Formatter):
     bold_red = Fore.RED
     reset = Style.RESET_ALL
 
-    FORMATS = {
+    FORMATS: ClassVar[dict[int, str]] = {
         logging.DEBUG: colored(USER_LOG_FORMAT, grey),
         logging.INFO: USER_LOG_FORMAT,
         logging.WARNING: colored(USER_LOG_FORMAT, yellow),
@@ -75,7 +77,8 @@ def print_ascii_art():
     message = (
         "You will be asked for your sudo password to run some commands\n"
         "that require elevated privileges.\n"
-        "DexOnLinux may temporarily take over the selected Wi-Fi interface.\n"
+        "DexOnLinux may briefly pause NetworkManager during the P2P session;\n"
+        "the existing Wi-Fi connection and internet stay active.\n"
         "For help or issues, visit: https://github.com/gabdevele/DexOnLinux\n"
     )
     print(colored(message, Fore.LIGHTWHITE_EX, Style.BRIGHT))
@@ -119,20 +122,21 @@ def confirm(prompt, default=False):
 def print_adb_instructions():
     print(colored("ADB Connection Instructions:", Fore.LIGHTWHITE_EX, Style.BRIGHT))
     print()
-    print(f"1. Connect your device to your PC via USB and enable USB Debugging in the developer options.")
-    print(f"2. Allow debugging from this PC on your device if prompted (you will see the RSA key fingerprint).")
-    print(f"3. After connecting your device, select it from the list shown below.")
+    print("1. Connect your device to your PC via USB and enable USB Debugging in the developer options.")
+    print("2. Allow debugging from this PC on your device if prompted (you will see the RSA key fingerprint).")
+    print("3. After connecting your device, select it from the list shown below.")
     print()
     input(colored("Press Enter when you are ready to continue...\n", Fore.LIGHTYELLOW_EX))
 
 def print_dex_instructions():
     print(colored("DeX Connection Instructions:", Fore.LIGHTWHITE_EX, Style.BRIGHT))
     print()
-    print(f"1. Open DeX on your device.")
-    print(f"2. Select 'Miracle' from the list of available displays.")
-    print(f"3. The program will automatically detect when your device connects via DeX.")
+    print("1. Open Smart View / DeX on your phone.")
+    print("2. Keep the phone unlocked and select DexOnLinux when it appears.")
+    print("3. The laptop will connect using Wi-Fi Direct PBC (no PIN).")
+    print("4. If the phone shows DexOnLinux as previously connected, forget it and retry.")
     print()
-    print(colored("If you get disconnected, simply reconnect your device via DeX.", Fore.LIGHTYELLOW_EX))
+    print(colored("If you get disconnected, reconnect from Smart View / DeX.", Fore.LIGHTYELLOW_EX))
     print("If you encounter issues, run again with --debug and include the log when reporting it.")
 
 def get_asset_path(name):
