@@ -9,10 +9,30 @@ import threading
 import time
 
 from dexonlinux.device import Device
+from dexonlinux.models import ScrcpyDisplay
 from dexonlinux.system import CommandError, Runner
 from dexonlinux.utils import get_asset_path, select_from_list
 
 LOG = logging.getLogger(__name__)
+
+
+def choose_display(displays: list[ScrcpyDisplay], explicit: int | None) -> ScrcpyDisplay | None:
+    """Pick the DeX display; return None when the caller should prompt."""
+    if explicit is not None:
+        match = next((item for item in displays if item.display_id == explicit), None)
+        if match is not None:
+            return match
+        LOG.warning("Display %s was not found; auto-selecting instead.", explicit)
+
+    landscape = [
+        item
+        for item in displays
+        if item.width is not None and item.height is not None and item.width > item.height
+    ]
+    if len(landscape) == 1:
+        LOG.info("Using DeX display %s (%sx%s).", landscape[0].display_id, landscape[0].width, landscape[0].height)
+        return landscape[0]
+    return None
 
 
 class ScrcpySession:
@@ -77,13 +97,14 @@ class ScrcpySession:
             process.wait(timeout=2.0)
 
     def _resolve_display_id(self) -> int | None:
-        if self.display_id is not None:
-            return self.display_id
-
         displays = Device(self._runner).list_scrcpy_displays(self.device)
         if not displays:
             LOG.warning("No scrcpy display id found; scrcpy will use its default display.")
-            return None
+            return self.display_id
+
+        selected = choose_display(displays, self.display_id)
+        if selected is not None:
+            return selected.display_id
 
         print()
         print("Hint: DeX is usually the landscape 16:9 display; the phone screen is usually portrait 9:16.")
