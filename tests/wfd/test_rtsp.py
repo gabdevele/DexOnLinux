@@ -106,3 +106,32 @@ def test_tcp_close_ends_session_cleanly():
     sink.run()
     thread.join(timeout=2)
     assert [name for name, _ in events] == ["connected", "disconnected"]
+
+
+def test_stop_closes_the_session_without_a_socket_race():
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    host, port = server.getsockname()
+    accepted = threading.Event()
+
+    def hold_client():
+        client, _ = server.accept()
+        accepted.set()
+        time.sleep(2.0)
+        client.close()
+        server.close()
+
+    thread = threading.Thread(target=hold_client, daemon=True)
+    thread.start()
+    events = []
+    sink = WfdSink(host, port, on_event=lambda name, data: events.append((name, data)))
+    runner = threading.Thread(target=sink.run)
+    runner.start()
+    assert accepted.wait(timeout=2)
+    time.sleep(0.2)
+    sink.stop()
+    runner.join(timeout=3.0)
+    assert runner.is_alive() is False
+    assert [name for name, _ in events] == ["connected", "disconnected"]

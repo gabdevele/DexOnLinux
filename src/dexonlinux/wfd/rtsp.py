@@ -197,9 +197,10 @@ class WfdSink:
     # -- public API ---------------------------------------------------------
 
     def stop(self) -> None:
+        # Do not close the connection here: the RTSP reader owns the socket
+        # and will notice the flag on its next read timeout.  Closing it from
+        # this thread races the reader and surfaces as EBADF.
         self._stop.set()
-        if self._conn is not None:
-            self._conn.close()
 
     def run(self) -> None:
         self._bind_rtp_socket()
@@ -213,7 +214,10 @@ class WfdSink:
             self.on_event("connected", {"peer": self.host, "rtp_port": self.rtp_port})
             self._loop()
         except (ConnectionError, OSError) as exc:
-            LOG.info("RTSP session ended: %s", exc)
+            if self._stop.is_set():
+                LOG.debug("RTSP session closed")
+            else:
+                LOG.info("RTSP session ended: %s", exc)
         finally:
             self._cleanup()
             self.on_event("disconnected", {})
