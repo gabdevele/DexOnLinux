@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 
 from dexonlinux.p2p.base import GroupInfo, P2PError
 from dexonlinux.p2p.events import EventKind, parse_event
@@ -13,12 +14,22 @@ LOG = logging.getLogger(__name__)
 
 
 class DirectBackend:
-    def __init__(self, interface, ctrl, wfd, link, frequency: int = 2437) -> None:
+    def __init__(
+        self,
+        interface,
+        ctrl,
+        wfd,
+        link,
+        frequency: int = 2437,
+        before_group: Callable[[], None] | None = None,
+    ) -> None:
         self.interface = interface
         self._ctrl = ctrl
         self._wfd = wfd
         self._link = link
         self._frequency = frequency
+        self._before_group = before_group
+        self._before_group_done = False
         self._state = None
         self.group_ifname: str | None = None
         self._pending_peer: str | None = None
@@ -85,6 +96,9 @@ class DirectBackend:
         self._send_connect(mac)
 
     def _send_connect(self, mac: str) -> None:
+        if self._before_group is not None and not self._before_group_done:
+            self._before_group()
+            self._before_group_done = True
         self._pending_peer = mac
         self._pending_until = time.monotonic() + 60.0
         self._ctrl.command(f"P2P_CONNECT {mac} pbc freq={self._frequency} go_intent=0")

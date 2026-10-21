@@ -46,6 +46,7 @@ class HelperClient:
         interface: str,
         backend: str = "direct",
         command: Sequence[str] | None = None,
+        suspend_nm: bool = False,
     ) -> HelperClient:
         if command is None:
             executable = shutil.which("dexonlinux-linkd")
@@ -54,6 +55,8 @@ class HelperClient:
             else:
                 command = ["sudo", "-n", sys.executable, "-m", "dexonlinux.helper"]
             command = [*command, "--interface", interface, "--backend", backend]
+            if suspend_nm:
+                command.append("--suspend-nm")
 
         process = subprocess.Popen(
             list(command),

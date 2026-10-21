@@ -11,6 +11,7 @@ import threading
 from dataclasses import asdict
 from typing import Callable
 
+from dexonlinux.nm import NetworkManagerSuspension
 from dexonlinux.p2p.base import GroupInfo, P2PError
 from dexonlinux.p2p.direct import DirectBackend
 from dexonlinux.p2p.events import EventKind, parse_event
@@ -76,6 +77,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--interface", required=True)
     parser.add_argument("--backend", choices=["direct"], default="direct")
     parser.add_argument("--p2p-freq", type=int, default=2437)
+    parser.add_argument(
+        "--suspend-nm",
+        action="store_true",
+        help="SIGSTOP NetworkManager only while the P2P group is being formed; "
+        "resume it automatically on exit (Wi-Fi stays connected).",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -89,18 +96,23 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         ctrl = SupplicantControl(find_ctrl_socket(args.interface))
+        suspension = NetworkManagerSuspension(args.suspend_nm)
         backend = DirectBackend(
             args.interface,
             ctrl,
             WfdConfigurator(),
             LinkConfigurator(SubprocessRunner()),
             frequency=args.p2p_freq,
+            before_group=suspension.suspend,
         )
     except (SupplicantError, CommandError) as exc:
         emit("error", {"code": exc.__class__.__name__, "message": str(exc)})
         return 1
 
-    return serve(backend, ctrl, stop, emit, args.backend, args.interface)
+    try:
+        return serve(backend, ctrl, stop, emit, args.backend, args.interface)
+    finally:
+        suspension.resume()
 
 
 if __name__ == "__main__":

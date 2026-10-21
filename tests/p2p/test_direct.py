@@ -103,6 +103,24 @@ def test_pbc_request_starts_client_connect_and_returns_group():
     assert group.go_ip == "192.168.49.1"
 
 
+def test_before_group_hook_runs_once_before_p2p_connect():
+    calls = []
+    ctrl = FakeCtrl()
+    backend = DirectBackend(
+        "wlp0s20f3",
+        ctrl,
+        FakeWfd(),
+        FakeLink(),
+        before_group=lambda: calls.append("suspend"),
+    )
+
+    backend._send_connect("aa:bb:cc:dd:ee:01")
+    backend._send_connect("aa:bb:cc:dd:ee:02")
+
+    assert calls == ["suspend"]
+    assert ctrl.commands[0].startswith("P2P_CONNECT aa:bb:cc:dd:ee:01")
+
+
 def test_go_role_is_rejected():
     backend = DirectBackend("wlp0s20f3", FakeCtrl(events=[group_event(role="GO")]), FakeWfd(), FakeLink())
     with pytest.raises(P2PError, match="client"):

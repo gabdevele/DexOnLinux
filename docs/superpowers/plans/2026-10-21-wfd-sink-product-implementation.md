@@ -4,6 +4,16 @@
 
 **Goal:** Replace miraclecast with a modular, stdlib-first WFD sink that starts Samsung DeX while keeping Wi-Fi internet usable, with NetworkManager left running.
 
+> **Design amendment (2026-10-21, after Gate 0):** Gate 0 failed for NM-owned
+> P2P (5 GHz firmware crash) and no runtime NM-detach path worked without a
+> reboot. The user accepted a controlled, session-scoped `SIGSTOP`/`SIGCONT`
+> of NetworkManager as the fallback. The direct backend is now the primary
+> backend. The helper freezes NM only immediately before `P2P_CONNECT` and
+> resumes it on every exit path, with a separate watchdog. Task 6 (NM backend)
+> is cancelled. The "never freeze NetworkManager" constraint below is
+> superseded by this amendment for the product's direct path. See
+> `docs/research/2026-10-21-nm-p2p-probe.md` for evidence.
+
 **Architecture:** A small privileged helper owns the wpa_supplicant control socket and the P2P lifecycle. The user process owns the CLI, RTSP client, ADB and scrcpy. Backends are selected by a doctor: NetworkManager-owned P2P is the primary path when the live gate passes; direct wpa_supplicant is the no-NetworkManager path. PBC is used (no PIN UI).
 
 **Tech Stack:** Python ≥ 3.9, stdlib (`socket`, `queue`, `threading`, `subprocess`, `json`, `dataclasses`, `typing`), `colorama` (existing), `pytest` + `ruff` for development. No `dbus-next` dependency: the proven ctrl_iface protocol is used for P2P/WFD and `nmcli` for NM profile activation.
@@ -1172,6 +1182,10 @@ git commit -m "docs: document WFD product path and acceptance"
 ## Execution Notes
 
 - Gate 0 and all live tests require the phone and sudo; unit tests do not.
-- Do not run `nmcli` while NetworkManager is frozen; the product never freezes it.
+- Do not run `nmcli` while NetworkManager is frozen. The helper freezes it only
+  for the P2P group and resumes it automatically; the user-side process must not
+  call `nmcli` during that window.
 - Keep the spike branch untouched as the reference implementation.
-- If Gate 0 fails, stop and update the design before implementing Task 6; the direct backend is still useful for standalone wpa_supplicant validation, but it is not a product solution on NetworkManager desktops.
+- The original "never freeze" rule was superseded after Gate 0; see the design
+  amendment at the top. The accepted product path is direct P2P with a
+  session-scoped NM SIGSTOP and a crash-safe watchdog.
