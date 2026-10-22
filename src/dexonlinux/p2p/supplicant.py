@@ -14,23 +14,16 @@ import time
 from pathlib import Path
 
 from dexonlinux.p2p.base import Peer
-from dexonlinux.p2p.control import SupplicantError
+from dexonlinux.p2p.control import SupplicantError, p2p_ctrl_name
 from dexonlinux.p2p.events import EventKind, P2PEvent, parse_event
 from dexonlinux.p2p.wfd import WfdConfigurator, WfdState
 
 LOG = logging.getLogger(__name__)
 
 CTRL_DIR = Path("/run/wpa_supplicant")
-IFNAMSIZ = 16
 DEFAULT_TIMEOUT = 2.0
 MAX_REPLY_BYTES = 4096
 _PRIORITY = re.compile(r"^<\d+>")
-
-
-def p2p_ctrl_name(interface: str) -> str:
-    if interface.startswith("p2p-dev-"):
-        return interface[: IFNAMSIZ - 1]
-    return ("p2p-dev-" + interface)[: IFNAMSIZ - 1]
 
 
 def find_ctrl_socket(interface: str, ctrl_dir: Path = CTRL_DIR) -> Path:

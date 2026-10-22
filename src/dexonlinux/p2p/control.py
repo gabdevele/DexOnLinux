@@ -13,6 +13,15 @@ from typing import Protocol
 from dexonlinux.p2p.base import Peer
 from dexonlinux.p2p.events import P2PEvent
 
+IFNAMSIZ = 16
+
+
+def p2p_ctrl_name(interface: str) -> str:
+    """Return the kernel-truncated ``p2p-dev-`` name for an interface."""
+    if interface.startswith("p2p-dev-"):
+        return interface[: IFNAMSIZ - 1]
+    return ("p2p-dev-" + interface)[: IFNAMSIZ - 1]
+
 
 class SupplicantError(RuntimeError):
     """The supplicant could not be reached or refused a request."""
