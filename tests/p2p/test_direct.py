@@ -10,9 +10,15 @@ from dexonlinux.p2p.events import parse_event
 class FakeCtrl:
     def __init__(self, events=None):
         self.events = list(events or [])
-        self.commands = []
         self.opened = False
         self.closed = False
+        self.wfd_state = object()
+        self.prepared = None
+        self.restored = None
+        self.connected = []
+        self.disconnected = False
+        self.listening = None
+        self.stopped_listen = False
 
     def open(self):
         self.opened = True
@@ -20,27 +26,29 @@ class FakeCtrl:
     def close(self):
         self.closed = True
 
-    def command(self, command, timeout=2.0):
-        self.commands.append(command)
-        return "OK"
+    def prepare_wfd(self, *, go_intent, device_name):
+        self.prepared = (go_intent, device_name)
+        return self.wfd_state
+
+    def restore_wfd(self, state):
+        self.restored = state
+
+    def start_extended_listen(self, period_ms, interval_ms):
+        self.listening = (period_ms, interval_ms)
+
+    def stop_extended_listen(self):
+        self.stopped_listen = True
+
+    def connect(self, peer, *, frequency, go_intent):
+        self.connected.append((peer, frequency, go_intent))
+
+    def disconnect(self):
+        self.disconnected = True
 
     def pump(self, timeout):
         if self.events:
-            return [parse_event(self.events.pop(0))]
+            return [self.events.pop(0)]
         return []
-
-
-class FakeWfd:
-    def __init__(self):
-        self.applied = False
-        self.restored = False
-
-    def apply(self, ctrl, device_name="DexOnLinux"):
-        self.applied = True
-        return object()
-
-    def restore(self, ctrl, state):
-        self.restored = True
 
 
 class FakeLink:
@@ -80,6 +88,12 @@ class FakeDhcp:
         self.stopped = True
 
 
+def event(line):
+    parsed = parse_event(line)
+    assert parsed is not None
+    return parsed
+
+
 def group_event(role="client", client_ip="192.168.49.200"):
     address = f"ip_addr={client_ip} ip_mask=255.255.255.0 " if client_ip else ""
     return (
@@ -88,87 +102,110 @@ def group_event(role="client", client_ip="192.168.49.200"):
     )
 
 
-def test_prepare_opens_and_advertises():
+def test_prepare_opens_and_starts_extended_listen():
     ctrl = FakeCtrl()
-    wfd = FakeWfd()
     link = FakeLink()
-    backend = DirectBackend("wlp0s20f3", ctrl, wfd, link)
+    backend = DirectBackend("wlp0s20f3", ctrl, link)
+
     backend.prepare()
+
     assert ctrl.opened is True
-    assert wfd.applied is True
+    assert ctrl.prepared == (0, "DexOnLinux")
+    assert ctrl.listening == (1000, 1000)
     assert link.stale_removed is True
-    assert "P2P_EXT_LISTEN 1000 1000" in ctrl.commands
 
 
-def test_pbc_request_starts_client_connect_and_returns_group():
+def test_pbc_request_connects_through_control():
     ctrl = FakeCtrl(
         events=[
-            "P2P-PROV-DISC-PBC-REQ ce:f9:f0:2b:8a:cc",
-            (
+            event("P2P-PROV-DISC-PBC-REQ ce:f9:f0:2b:8a:cc"),
+            event(
                 "P2P-GO-NEG-SUCCESS role=client freq=2437 peer_dev=ce:f9:f0:2b:8a:cc "
                 "peer_iface=ce:f9:f0:2b:0a:cc wps_method=PBC"
             ),
-            group_event(),
+            event(group_event()),
         ]
     )
     link = FakeLink()
-    backend = DirectBackend("wlp0s20f3", ctrl, FakeWfd(), link)
+    backend = DirectBackend("wlp0s20f3", ctrl, link)
+
     group = backend.connect(stop=threading.Event(), timeout=1.0)
+
+    assert len(ctrl.connected) == 1
+    peer, frequency, go_intent = ctrl.connected[0]
+    assert peer.mac == "ce:f9:f0:2b:8a:cc"
+    assert (frequency, go_intent) == (2437, 0)
     assert link.watcher_started is True
-    assert "P2P_CONNECT ce:f9:f0:2b:8a:cc pbc freq=2437 go_intent=0" in ctrl.commands
     assert link.configured == [("p2p-wlp0s20-7", "192.168.49.200/24")]
     assert group.role is P2PRole.CLIENT
     assert group.peer_ip == "192.168.49.1"
 
 
+def test_duplicate_pbc_request_connects_once():
+    ctrl = FakeCtrl(
+        events=[
+            event("P2P-PROV-DISC-PBC-REQ ce:f9:f0:2b:8a:cc"),
+            event("P2P-PROV-DISC-PBC-REQ ce:f9:f0:2b:8a:cc"),
+            event(group_event()),
+        ]
+    )
+    backend = DirectBackend("wlp0s20f3", ctrl, FakeLink())
+
+    backend.connect(stop=threading.Event(), timeout=1.0)
+
+    assert len(ctrl.connected) == 1
+
+
 def test_preup_waits_for_go_negotiation_success():
     ctrl = FakeCtrl(
         events=[
-            "P2P-PROV-DISC-PBC-REQ ce:f9:f0:2b:8a:cc",
-            (
+            event("P2P-PROV-DISC-PBC-REQ ce:f9:f0:2b:8a:cc"),
+            event(
                 "P2P-GO-NEG-SUCCESS role=client freq=2437 peer_dev=ce:f9:f0:2b:8a:cc "
                 "peer_iface=ce:f9:f0:2b:0a:cc wps_method=PBC"
             ),
-            group_event(),
+            event(group_event()),
         ]
     )
     link = FakeLink()
-    backend = DirectBackend("wlp0s20f3", ctrl, FakeWfd(), link)
+    backend = DirectBackend("wlp0s20f3", ctrl, link)
 
-    backend._send_connect("ce:f9:f0:2b:8a:cc")
+    backend._send_connect(event("P2P-PROV-DISC-PBC-REQ aa:bb:cc:dd:ee:ff").peer)
     assert link.watcher_started is False
 
     backend.connect(stop=threading.Event(), timeout=1.0)
     assert link.watcher_started is True
 
 
-def test_before_group_hook_runs_once_before_p2p_connect():
+def test_before_group_hook_runs_once_before_connect():
     calls = []
     ctrl = FakeCtrl()
     backend = DirectBackend(
         "wlp0s20f3",
         ctrl,
-        FakeWfd(),
         FakeLink(),
         before_group=lambda: calls.append("suspend"),
     )
 
-    backend._send_connect("aa:bb:cc:dd:ee:01")
-    backend._send_connect("aa:bb:cc:dd:ee:02")
+    backend._send_connect(event("P2P-PROV-DISC-PBC-REQ aa:bb:cc:dd:ee:01").peer)
+    backend._send_connect(event("P2P-PROV-DISC-PBC-REQ aa:bb:cc:dd:ee:02").peer)
 
     assert calls == ["suspend"]
-    assert ctrl.commands[0].startswith("P2P_CONNECT aa:bb:cc:dd:ee:01")
+    assert len(ctrl.connected) == 2
 
 
 def test_connect_uses_the_configured_frequency():
     ctrl = FakeCtrl()
-    backend = DirectBackend("wlp0s20f3", ctrl, FakeWfd(), FakeLink(), frequency=2412)
-    backend._send_connect("aa:bb:cc:dd:ee:01")
-    assert "freq=2412" in ctrl.commands[0]
+    backend = DirectBackend("wlp0s20f3", ctrl, FakeLink(), frequency=2412)
+
+    backend._send_connect(event("P2P-PROV-DISC-PBC-REQ aa:bb:cc:dd:ee:01").peer)
+
+    assert ctrl.connected[0][1] == 2412
 
 
 def test_go_group_is_rejected_when_client_role_was_requested():
-    backend = DirectBackend("wlp0s20f3", FakeCtrl(events=[group_event(role="GO")]), FakeWfd(), FakeLink())
+    backend = DirectBackend("wlp0s20f3", FakeCtrl(events=[event(group_event(role="GO"))]), FakeLink())
+
     with pytest.raises(P2PError, match="client role"):
         backend.connect(stop=threading.Event(), timeout=1.0)
 
@@ -176,12 +213,12 @@ def test_go_group_is_rejected_when_client_role_was_requested():
 def test_client_group_is_rejected_when_go_role_was_requested():
     backend = DirectBackend(
         "wlp0s20f3",
-        FakeCtrl(events=[group_event()]),
-        FakeWfd(),
+        FakeCtrl(events=[event(group_event())]),
         FakeLink(),
         role=P2PRole.GO,
         dhcp=FakeDhcp(),
     )
+
     with pytest.raises(P2PError, match="GO role"):
         backend.connect(stop=threading.Event(), timeout=1.0)
 
@@ -189,12 +226,12 @@ def test_client_group_is_rejected_when_go_role_was_requested():
 def test_go_role_uses_the_go_network_and_dhcp():
     ctrl = FakeCtrl(
         events=[
-            "P2P-PROV-DISC-PBC-REQ ce:f9:f0:2b:8a:cc",
-            (
+            event("P2P-PROV-DISC-PBC-REQ ce:f9:f0:2b:8a:cc"),
+            event(
                 "P2P-GO-NEG-SUCCESS role=GO freq=2437 peer_dev=ce:f9:f0:2b:8a:cc "
                 "peer_iface=ce:f9:f0:2b:0a:cc wps_method=PBC"
             ),
-            group_event(role="GO", client_ip=""),
+            event(group_event(role="GO", client_ip="")),
         ]
     )
     link = FakeLink()
@@ -202,17 +239,18 @@ def test_go_role_uses_the_go_network_and_dhcp():
     backend = DirectBackend(
         "wlp0s20f3",
         ctrl,
-        FakeWfd(),
         link,
         role=P2PRole.GO,
         network=GroupNetwork("10.13.37.1", "10.13.37.2", 24),
         dhcp=dhcp,
     )
+
     group = backend.connect(stop=threading.Event(), timeout=1.0)
+
     assert group.role is P2PRole.GO
     assert group.local_ip == "10.13.37.1"
     assert group.peer_ip == "10.13.37.2"
-    assert "P2P_CONNECT ce:f9:f0:2b:8a:cc pbc freq=2437 go_intent=15" in ctrl.commands
+    assert ctrl.connected[0][2] == 15
     assert link.configured == [("p2p-wlp0s20-7", "10.13.37.1/24")]
     assert dhcp.started == ["p2p-wlp0s20-7"]
 
@@ -220,32 +258,44 @@ def test_go_role_uses_the_go_network_and_dhcp():
 def test_go_role_without_dhcp_server_fails():
     backend = DirectBackend(
         "wlp0s20f3",
-        FakeCtrl(events=[group_event(role="GO")]),
-        FakeWfd(),
+        FakeCtrl(events=[event(group_event(role="GO"))]),
         FakeLink(),
         role=P2PRole.GO,
     )
+
     with pytest.raises(P2PError, match="DHCP"):
         backend.connect(stop=threading.Event(), timeout=1.0)
 
 
 def test_pin_request_is_rejected_with_actionable_message():
-    event = "P2P-PROV-DISC-SHOW-PIN ce:f9:f0:2b:8a:cc 12345678"
-    backend = DirectBackend("wlp0s20f3", FakeCtrl(events=[event]), FakeWfd(), FakeLink())
+    backend = DirectBackend(
+        "wlp0s20f3",
+        FakeCtrl(events=[event("P2P-PROV-DISC-SHOW-PIN ce:f9:f0:2b:8a:cc 12345678")]),
+        FakeLink(),
+    )
+
     with pytest.raises(P2PError, match="PBC"):
         backend.connect(stop=threading.Event(), timeout=1.0)
 
 
 def test_invitation_is_rejected_with_stale_group_message():
-    event = "P2P-INVITATION-RECEIVED ce:f9:f0:2b:8a:cc persistent=1"
-    backend = DirectBackend("wlp0s20f3", FakeCtrl(events=[event]), FakeWfd(), FakeLink())
+    backend = DirectBackend(
+        "wlp0s20f3",
+        FakeCtrl(events=[event("P2P-INVITATION-RECEIVED ce:f9:f0:2b:8a:cc persistent=1")]),
+        FakeLink(),
+    )
+
     with pytest.raises(P2PError, match="previously connected"):
         backend.connect(stop=threading.Event(), timeout=1.0)
 
 
 def test_go_negotiation_with_non_pbc_password_id_is_rejected():
-    event = "P2P-GO-NEG-REQUEST ce:f9:f0:2b:8a:cc dev_passwd_id=1 go_intent=15"
-    backend = DirectBackend("wlp0s20f3", FakeCtrl(events=[event]), FakeWfd(), FakeLink())
+    backend = DirectBackend(
+        "wlp0s20f3",
+        FakeCtrl(events=[event("P2P-GO-NEG-REQUEST ce:f9:f0:2b:8a:cc dev_passwd_id=1 go_intent=15")]),
+        FakeLink(),
+    )
+
     with pytest.raises(P2PError, match="PBC"):
         backend.connect(stop=threading.Event(), timeout=1.0)
 
@@ -253,45 +303,65 @@ def test_go_negotiation_with_non_pbc_password_id_is_rejected():
 def test_group_without_client_ip_fails_clearly():
     ctrl = FakeCtrl(
         events=[
-            "P2P-PROV-DISC-PBC-REQ ce:f9:f0:2b:8a:cc",
-            group_event(client_ip=""),
+            event("P2P-PROV-DISC-PBC-REQ ce:f9:f0:2b:8a:cc"),
+            event(group_event(client_ip="")),
         ]
     )
-    backend = DirectBackend("wlp0s20f3", ctrl, FakeWfd(), FakeLink())
+    backend = DirectBackend("wlp0s20f3", ctrl, FakeLink())
+
     with pytest.raises(P2PError, match="WPS client address"):
         backend.connect(stop=threading.Event(), timeout=1.0)
 
 
-def test_close_removes_group_and_restores_supplicant():
+def test_close_disconnects_and_restores_wfd():
     ctrl = FakeCtrl()
     link = FakeLink()
-    wfd = FakeWfd()
-    backend = DirectBackend("wlp0s20f3", ctrl, wfd, link)
+    backend = DirectBackend("wlp0s20f3", ctrl, link)
     backend.prepare()
     backend.group_ifname = "p2p-wlp0s20-7"
+
     backend.close()
-    assert "P2P_GROUP_REMOVE p2p-wlp0s20-7" in ctrl.commands
+
+    assert ctrl.disconnected is True
     assert link.removed == ["p2p-wlp0s20-7"]
     assert link.watcher_stopped is True
-    assert wfd.restored is True
+    assert ctrl.restored is ctrl.wfd_state
     assert ctrl.closed is True
+
+
+def test_wait_for_group_end_returns_the_reason():
+    ctrl = FakeCtrl(events=[event("P2P-GROUP-REMOVED p2p-wlp0s20-7 reason=test")])
+    backend = DirectBackend("wlp0s20f3", ctrl, FakeLink())
+
+    assert backend.wait_for_group_end(threading.Event()) == "P2P-GROUP-REMOVED p2p-wlp0s20-7 reason=test"
+
+
+def test_wait_for_group_end_returns_none_when_stopped():
+    ctrl = FakeCtrl()
+    backend = DirectBackend("wlp0s20f3", ctrl, FakeLink())
+    stop = threading.Event()
+    stop.set()
+
+    assert backend.wait_for_group_end(stop) is None
 
 
 def test_go_group_with_a_conflicting_address_fails_clearly():
     ctrl = FakeCtrl(
         events=[
-            'P2P-GROUP-STARTED p2p-wlp0s20-7 GO ssid="x" freq=2437 '
-            "ip_addr=192.168.49.1 ip_mask=255.255.255.0"
+            event(
+                'P2P-GROUP-STARTED p2p-wlp0s20-7 GO ssid="x" freq=2437 '
+                "ip_addr=192.168.49.1 ip_mask=255.255.255.0"
+            )
         ]
     )
     backend = DirectBackend(
         "wlp0s20f3",
         ctrl,
-        FakeWfd(),
         FakeLink(),
         role=P2PRole.GO,
         network=GroupNetwork("10.13.37.1", "10.13.37.2", 24),
         dhcp=FakeDhcp(),
     )
+
     with pytest.raises(P2PError, match="does not match"):
         backend.connect(stop=threading.Event(), timeout=1.0)

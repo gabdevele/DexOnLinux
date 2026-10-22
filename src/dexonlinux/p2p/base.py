@@ -84,5 +84,8 @@ class P2PBackend(Protocol):
     def connect(self, stop: threading.Event, timeout: float = 90.0) -> GroupInfo:
         """Wait for the phone and return the started group (either role)."""
 
+    def wait_for_group_end(self, stop: threading.Event) -> str | None:
+        """Block until the group ends; return a reason, or None when stopped."""
+
     def close(self) -> None:
         """Remove the group and restore the settings touched by prepare()."""

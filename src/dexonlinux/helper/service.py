@@ -18,7 +18,6 @@ from dexonlinux.nm import NetworkManagerSuspension
 from dexonlinux.p2p.base import DEFAULT_P2P_FREQ, GroupInfo, P2PBackend, P2PError, P2PRole
 from dexonlinux.p2p.dhcp import DhcpServer
 from dexonlinux.p2p.direct import DirectBackend
-from dexonlinux.p2p.events import EventKind
 from dexonlinux.p2p.link import LinkConfigurator
 from dexonlinux.p2p.supplicant import SupplicantControl, SupplicantError, find_ctrl_socket
 from dexonlinux.p2p.wfd import WfdConfigurator
@@ -34,25 +33,23 @@ def emit(event: str, data: dict[str, object]) -> None:
 
 def serve(
     backend: P2PBackend,
-    ctrl: SupplicantControl,
     stop: threading.Event,
     emitter: Emitter,
     backend_name: str,
     interface: str,
+    transport: str,
 ) -> int:
     try:
         backend.prepare()
         emitter(
             "ready",
-            {"backend": backend_name, "interface": interface, "ctrl": str(ctrl.path)},
+            {"backend": backend_name, "interface": interface, "transport": transport},
         )
         group: GroupInfo = backend.connect(stop)
         emitter("group_started", asdict(group))
-        while not stop.is_set():
-            for event in ctrl.pump(0.5):
-                if event.kind is EventKind.GROUP_REMOVED:
-                    emitter("group_finished", {"reason": event.raw})
-                    return 0
+        reason = backend.wait_for_group_end(stop)
+        if reason is not None:
+            emitter("group_finished", {"reason": reason})
         return 0
     except (P2PError, SupplicantError, CommandError) as exc:
         if not stop.is_set():
@@ -124,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        return serve(backend, ctrl, stop, emit, args.backend, args.interface)
+        return serve(backend, stop, emit, args.backend, args.interface, "ctrl")
     finally:
         suspension.resume()
 
