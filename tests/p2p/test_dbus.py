@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 
 from dexonlinux.p2p.base import P2PError, P2PRole, Peer
@@ -14,6 +16,7 @@ from dexonlinux.p2p.dbus import (
     _ipv4,
     _prefix,
 )
+from dexonlinux.p2p.direct import DirectBackend
 from dexonlinux.p2p.events import EventKind
 from dexonlinux.p2p.wfd import WFD_IES
 
@@ -345,3 +348,90 @@ def test_ipv4_and_prefix_helpers():
     assert _ipv4(None) is None
     assert _prefix(bytes([255, 255, 255, 0])) == 24
     assert _prefix(None) == 24
+
+
+class RecordingLink:
+    def __init__(self):
+        self.configured = []
+        self.removed = []
+        self.watcher_started = False
+        self.watcher_stopped = False
+
+    def configure(self, ifname, cidr):
+        self.configured.append((ifname, cidr))
+
+    def remove(self, ifname):
+        self.removed.append(ifname)
+
+    def remove_stale(self):
+        pass
+
+    def start_watcher(self):
+        self.watcher_started = True
+
+    def stop_watcher(self):
+        self.watcher_stopped = True
+
+
+class RecordingDhcp:
+    peer_ip = "192.168.49.2"
+
+    def __init__(self):
+        self.started = []
+        self.stopped = False
+
+    def start(self, ifname):
+        self.started.append(ifname)
+
+    def stop(self):
+        self.stopped = True
+
+
+def test_dbus_backend_end_to_end():
+    client = FakeDBusClient()
+    control = WpaSupplicantDBus("wlan0", client)
+    link = RecordingLink()
+    dhcp = RecordingDhcp()
+    backend = DirectBackend("wlan0", control, link, role=P2PRole.GO, dhcp=dhcp)
+    backend.prepare()
+
+    client.properties[(GROUP_DEVICE, INTERFACE_IFACE, "Ifname")] = "p2p-wlan0-0"
+    client.properties[(GROUP_OBJECT, GROUP_IFACE, "Frequency")] = 2437
+    client.properties[(DEVICE, P2P_IFACE, "DeviceAddress")] = bytes(
+        [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]
+    )
+    peer_path = f"{DEVICE}/Peers/aa_bb_cc_dd_ee_ff"
+    client.emit("ProvisionDiscoveryPBCRequest", (peer_path,))
+    client.emit("GONegotiationSuccess", ({"peer_object": peer_path, "role_go": "GO"},))
+    client.emit(
+        "GroupStarted",
+        ({"interface_object": GROUP_DEVICE, "role": "GO", "group_object": GROUP_OBJECT},),
+    )
+
+    group = backend.connect(stop=threading.Event(), timeout=1.0)
+
+    assert group.role is P2PRole.GO
+    assert group.local_ip == "192.168.49.1"
+    assert group.peer_ip == "192.168.49.2"
+    assert link.configured == [("p2p-wlan0-0", "192.168.49.1/24")]
+    assert dhcp.started == ["p2p-wlan0-0"]
+    assert link.watcher_started is True
+
+    connects = [call for call in client.calls if call[2] == "Connect"]
+    assert len(connects) == 1
+    assert connects[0][3][0]["peer"] == peer_path
+    assert connects[0][3][0]["wps_method"] == "pbc"
+
+    client.emit(
+        "GroupFinished",
+        ({"interface_object": GROUP_DEVICE, "role": "GO", "group_object": GROUP_OBJECT},),
+    )
+    assert backend.wait_for_group_end(threading.Event()) == "P2P group finished"
+
+    backend.close()
+
+    assert dhcp.stopped is True
+    assert link.watcher_stopped is True
+    # The phone already removed the group, so close() must not try again.
+    assert link.removed == []
+    assert client.closed is True

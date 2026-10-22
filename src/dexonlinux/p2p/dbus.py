@@ -249,7 +249,9 @@ class DBusFastClient:
                 "org.freedesktop.DBus.Error.AccessDenied",
                 "org.freedesktop.DBus.Error.AuthFailed",
             }:
-                raise DBusPermissionDenied(f"{error_name}: {exc.text}") from exc
+                raise DBusPermissionDenied(
+                    f"{error_name}: this user cannot read the supplicant properties"
+                ) from exc
             if error_name in {
                 "org.freedesktop.DBus.Error.ServiceUnknown",
                 "org.freedesktop.DBus.Error.NameHasNoOwner",

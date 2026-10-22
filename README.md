@@ -89,15 +89,21 @@ dexonlinux --interface wlan0 --device R5CN1234567
 dexonlinux --display-id 2
 dexonlinux --fullscreen
 dexonlinux --p2p-freq 5180
+dexonlinux --p2p-transport ctrl
 dexonlinux --debug --log-file dexonlinux.log
 dexonlinux --no-banner --no-color
 ```
 
 `dexonlinux --doctor` is read-only and prints the detected network stack, the
-selected P2P backend, whether NetworkManager will be paused, and any reasons the
-host is unsupported. It also checks that the requested P2P frequency
-(`--p2p-freq`, default 2437 MHz) is in the adapter's channel list, and suggests
-usable channels when it is not.
+selected P2P backend and transport, whether NetworkManager will be paused, and
+any reasons the host is unsupported. It also checks that the requested P2P
+frequency (`--p2p-freq`, default 2437 MHz) is in the adapter's channel list,
+and suggests usable channels when it is not.
+
+The helper prefers the wpa_supplicant D-Bus API and falls back to the
+`/run/wpa_supplicant/p2p-dev-*` control socket when the D-Bus API is missing
+(a supplicant built without `CONFIG_WIFI_DISPLAY`, or without P2P). Use
+`--p2p-transport dbus` or `--p2p-transport ctrl` to force one.
 
 On the phone:
 
@@ -108,8 +114,8 @@ On the phone:
 
 ## How it works
 
-The privileged helper owns only the P2P device through the system
-wpa_supplicant control socket:
+The privileged helper owns only the P2P device through the existing system
+wpa_supplicant, over D-Bus when the build exposes the P2P/WFD API:
 
 1. It configures the WFD information elements and listens for PBC.
 2. Immediately before `P2P_CONNECT`, it sends `SIGSTOP` to NetworkManager.
@@ -123,6 +129,7 @@ wpa_supplicant control socket:
    `SIGCONT`; a separate watchdog also resumes NetworkManager if the helper dies.
 
 The station Wi-Fi and its routes are not modified, so internet stays available.
+wpa_supplicant and NetworkManager are never stopped or reconfigured.
 
 ## Troubleshooting
 
@@ -130,8 +137,15 @@ The station Wi-Fi and its routes are not modified, so internet stays available.
   starting a session.
 - `NM + iwd` or ConnMan: switch to NetworkManager with wpa_supplicant (v1 does
   not implement iwd/ConnMan P2P).
-- No P2P control socket: enable Wi-Fi and Wi-Fi Direct; make sure
-  wpa_supplicant is running under NetworkManager.
+- `P2P transport: none`: the supplicant D-Bus API is missing and there is no
+  P2P control socket. Enable Wi-Fi Direct and check that wpa_supplicant is
+  running under NetworkManager. `--p2p-transport ctrl` forces the control
+  socket when D-Bus is incomplete.
+- `P2P transport: unknown`: the doctor could not read the supplicant as this
+  user; the privileged helper verifies it before starting.
+- `built without CONFIG_WIFI_DISPLAY`: the distribution's wpa_supplicant lacks
+  the Wi-Fi Display API; install a build with WFD support or use the control
+  socket if it is available.
 - Phone shows `DexOnLinux` as previously connected: forget the device in Smart
   View and retry.
 - `frequency 2437 MHz is not supported by this adapter`: the doctor lists the

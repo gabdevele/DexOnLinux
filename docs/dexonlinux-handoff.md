@@ -1,5 +1,24 @@
 # DexOnLinux - Handoff & Architecture Strategy Document
 
+> **Status update — 2026-10-22: P2P transport moved to D-Bus.**
+> - The helper now prefers the official `wpa_supplicant` D-Bus API
+>   (`fi.w1.wpa_supplicant1.Interface.P2PDevice`) for WFD IEs, PBC,
+>   `ExtendedListen`, group events and teardown. The old P2P ctrl_iface client
+>   remains as an explicit fallback (`--p2p-transport ctrl`) for builds whose
+>   D-Bus API is incomplete.
+> - `NetworkManager` suspension uses `psutil` (`Process.suspend`/`resume`,
+>   pid-reuse checks) instead of `/proc` parsing.
+> - Link addresses, link state and interface enumeration use `pyroute2`
+>   (netlink) instead of `ip` and sysfs polling. P2P group removal still uses
+>   `iw dev <ifname> del`, which is nl80211-specific.
+> - The minimum Python is now 3.11 (`dbus-fast` 5.x). Dependencies:
+>   `dbus-fast`, `psutil`, `pyroute2`.
+> - 173 unit tests; `--doctor` reports the selected transport and falls back
+>   without false negatives when the unprivileged probe is denied.
+> - **Release gate:** re-run `dexonlinux --doctor` and one live phone session
+>   on Ubuntu/Debian, Arch and Fedora before tagging 1.2.0. Confirm that
+>   NetworkManager resumes, the group is removed and Wi-Fi internet stays up.
+>
 > **Status update — 2026-10-21: implemented and live-accepted on the v1.0.2
 > tree; the cleanup landed on top; the post-cleanup live re-run is pending.**
 > The plan below was executed in this workspace:
@@ -37,8 +56,8 @@
 ## 1. Executive Summary & Context
 **DexOnLinux** is an open-source tool designed to bridge Samsung DeX to Linux desktop environments.
 - **Author:** gabdevele
-- **Current Version:** v1.1.0 (Alpha / Functional MVP)
-- **Stack:** Python (>= 3.9), uv, `miraclecast`, `scrcpy`, `adb`, `NetworkManager` / `wpa_supplicant`.
+- **Current Version:** v1.2.0 (Alpha / Functional MVP)
+- **Stack:** Python (>= 3.11), uv, `dbus-fast`, `psutil`, `pyroute2`, `scrcpy`, `adb`, `NetworkManager` / `wpa_supplicant`.
 - **Core Concept:** A pragmatic "hacker workaround":
   1. Uses `miracle-wifid` and `miracle-sinkctl` to emulate a Miracast Wi-Fi Direct sink, tricking Samsung One UI into initiating a native wireless DeX session.
   2. Discards the raw MPEG-TS video stream sent over UDP via a local socket drain thread (`StreamHandler._drain_stream`).
