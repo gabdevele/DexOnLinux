@@ -1,8 +1,10 @@
 import threading
+from dataclasses import replace
 
 import pytest
 
 from dexonlinux.p2p.base import GroupNetwork, P2PError, P2PRole
+from dexonlinux.p2p.control import SupplicantError
 from dexonlinux.p2p.direct import DirectBackend
 from dexonlinux.p2p.events import parse_event
 
@@ -365,3 +367,34 @@ def test_go_group_with_a_conflicting_address_fails_clearly():
 
     with pytest.raises(P2PError, match="does not match"):
         backend.connect(stop=threading.Event(), timeout=1.0)
+
+
+def test_duplicate_pbc_request_from_a_different_path_connects_once():
+    first = event("P2P-PROV-DISC-PBC-REQ aa:bb:cc:dd:ee:ff")
+    second = replace(first, peer=replace(first.peer, path=f"{first.peer.mac.replace(':', '_')}"))
+    ctrl = FakeCtrl(events=[first, second, event(group_event())])
+    backend = DirectBackend("wlp0s20f3", ctrl, FakeLink())
+
+    backend.connect(stop=threading.Event(), timeout=1.0)
+
+    assert len(ctrl.connected) == 1
+
+
+def test_failed_connect_is_retried():
+    ctrl = FakeCtrl()
+    attempts = []
+
+    def connect(peer, *, frequency, go_intent):
+        attempts.append(peer)
+        if len(attempts) == 1:
+            raise SupplicantError("busy")
+
+    ctrl.connect = connect
+    backend = DirectBackend("wlp0s20f3", ctrl, FakeLink())
+    peer = event("P2P-PROV-DISC-PBC-REQ aa:bb:cc:dd:ee:ff").peer
+
+    with pytest.raises(SupplicantError, match="busy"):
+        backend._connect_pbc(peer)
+    backend._connect_pbc(peer)
+
+    assert len(attempts) == 2

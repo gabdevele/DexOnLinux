@@ -146,7 +146,9 @@ class DirectBackend:
         return group
 
     def _connect_pbc(self, peer: Peer) -> None:
-        key = peer.path or peer.mac
+        # The D-Bus peer path and the ctrl-iface MAC identify the same phone;
+        # deduplicate by MAC so a path change cannot trigger a second Connect.
+        key = peer.mac or peer.path
         now = time.monotonic()
         if key == self._pending_peer and now < self._pending_until:
             return
@@ -156,9 +158,15 @@ class DirectBackend:
         if self._before_group is not None and not self._before_group_done:
             self._before_group()
             self._before_group_done = True
-        self._pending_peer = peer.path or peer.mac
+        self._pending_peer = peer.mac or peer.path
         self._pending_until = time.monotonic() + _RETRY_WINDOW
-        self._control.connect(peer, frequency=self._frequency, go_intent=self._role.go_intent)
+        try:
+            self._control.connect(peer, frequency=self._frequency, go_intent=self._role.go_intent)
+        except (P2PError, SupplicantError):
+            # A failed attempt must not suppress the retry that follows.
+            self._pending_peer = None
+            self._pending_until = 0.0
+            raise
 
     def _start_preup(self) -> None:
         if self._preup_started:

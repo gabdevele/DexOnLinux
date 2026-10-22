@@ -75,10 +75,14 @@ class NetworkManagerSuspension:
             raise NetworkManagerError(
                 f"refusing to suspend pid {pid}: it is not NetworkManager"
             )
+        try:
+            created = proc.create_time()
+        except psutil.Error as exc:
+            raise NetworkManagerError(f"cannot inspect pid {pid}: {exc}") from exc
 
         # Start the watchdog before suspending. If this process dies between
         # the two operations, closing the watchdog pipe still sends SIGCONT.
-        self._watchdog = _start_watchdog(pid)
+        self._watchdog = _start_watchdog(pid, created)
         try:
             if not _status_is_stopped(proc):
                 proc.suspend()
@@ -229,10 +233,10 @@ def _wait_for_state(proc: psutil.Process, *, stopped: bool, timeout: float, inte
     return False
 
 
-def _start_watchdog(pid: int) -> subprocess.Popen[bytes]:
+def _start_watchdog(pid: int, created: float) -> subprocess.Popen[bytes]:
     try:
         return subprocess.Popen(
-            [sys.executable, "-m", "dexonlinux.nm_watchdog", str(pid)],
+            [sys.executable, "-m", "dexonlinux.nm_watchdog", str(pid), repr(created)],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

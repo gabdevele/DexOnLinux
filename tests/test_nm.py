@@ -22,15 +22,19 @@ class FakeWatchdog:
 
 
 class FakeProcess:
-    def __init__(self, pid=4321, name="NetworkManager", status=psutil.STATUS_RUNNING):
+    def __init__(self, pid=4321, name="NetworkManager", status=psutil.STATUS_RUNNING, created=1000.0):
         self.pid = pid
         self._name = name
         self._status = status
+        self._created = created
         self.suspended = False
         self.resumed = False
 
     def name(self):
         return self._name
+
+    def create_time(self):
+        return self._created
 
     def status(self):
         return self._status
@@ -49,9 +53,9 @@ def fake_nm(monkeypatch):
     proc = FakeProcess()
     watchdogs = []
 
-    def start_watchdog(pid):
+    def start_watchdog(pid, created):
         watchdog = FakeWatchdog()
-        watchdogs.append((pid, watchdog))
+        watchdogs.append((pid, created, watchdog))
         return watchdog
 
     monkeypatch.setattr(nm, "_read_pid", lambda path: proc.pid)
@@ -70,13 +74,14 @@ def test_suspend_calls_process_suspend_and_waits_for_stopped_status(fake_nm):
     assert proc.suspended is True
     assert proc.status() == psutil.STATUS_STOPPED
     assert len(watchdogs) == 1
+    assert watchdogs[0][:2] == (4321, 1000.0)
     assert suspension.suspended is True
 
     suspension.resume()
 
     assert proc.resumed is True
     assert proc.status() == psutil.STATUS_RUNNING
-    assert watchdogs[0][1].waited is True
+    assert watchdogs[0][2].waited is True
     assert suspension.suspended is False
 
 
@@ -186,9 +191,27 @@ def test_find_pid_by_name_ignores_disappeared_processes(monkeypatch):
 
 
 def test_watchdog_resumes_with_psutil(monkeypatch):
-    proc = FakeProcess(pid=777)
+    proc = FakeProcess(pid=777, created=1234.0)
     monkeypatch.setattr(nm_watchdog.psutil, "Process", lambda pid: proc)
     monkeypatch.setattr(nm_watchdog.sys, "stdin", io.TextIOWrapper(io.BytesIO(b"")))
 
-    assert nm_watchdog.main([str(proc.pid)]) == 0
+    assert nm_watchdog.main([str(proc.pid), repr(proc._created)]) == 0
     assert proc.resumed is True
+
+
+def test_watchdog_refuses_a_reused_pid(monkeypatch):
+    proc = FakeProcess(pid=777, created=9999.0)
+    monkeypatch.setattr(nm_watchdog.psutil, "Process", lambda pid: proc)
+    monkeypatch.setattr(nm_watchdog.sys, "stdin", io.TextIOWrapper(io.BytesIO(b"")))
+
+    assert nm_watchdog.main(["777", "1234.0"]) == 0
+    assert proc.resumed is False
+
+
+def test_watchdog_refuses_a_non_network_manager_pid(monkeypatch):
+    proc = FakeProcess(pid=777, name="something-else", created=1234.0)
+    monkeypatch.setattr(nm_watchdog.psutil, "Process", lambda pid: proc)
+    monkeypatch.setattr(nm_watchdog.sys, "stdin", io.TextIOWrapper(io.BytesIO(b"")))
+
+    assert nm_watchdog.main(["777", "1234.0"]) == 0
+    assert proc.resumed is False
