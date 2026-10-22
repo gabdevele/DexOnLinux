@@ -6,9 +6,9 @@ NetworkManager.
 """
 
 import contextlib
-import os
-import signal
 import sys
+
+import psutil
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -26,8 +26,8 @@ def main(argv: list[str] | None = None) -> int:
     with contextlib.suppress(AttributeError, OSError):
         sys.stdin.buffer.read()
 
-    with contextlib.suppress(ProcessLookupError):
-        os.kill(pid, signal.SIGCONT)
+    with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
+        psutil.Process(pid).resume()
     return 0
 
 

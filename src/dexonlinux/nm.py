@@ -12,13 +12,13 @@ before it can clean up.
 
 import atexit
 import logging
-import os
-import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
 from types import TracebackType
+
+import psutil
 
 LOG = logging.getLogger(__name__)
 
@@ -68,29 +68,30 @@ class NetworkManagerSuspension:
             LOG.info("NetworkManager is not running; no suspension needed")
             return
 
-        state = _process_state(pid)
-        if state is None:
+        proc = _process(pid)
+        if proc is None:
             raise NetworkManagerError(f"NetworkManager pid {pid} does not exist")
-        if _process_name(pid) != "NetworkManager":
+        if _process_name(proc) != "NetworkManager":
             raise NetworkManagerError(
                 f"refusing to suspend pid {pid}: it is not NetworkManager"
             )
 
-        # Start the watchdog before SIGSTOP. If this process dies between the
-        # two operations, closing the watchdog pipe still sends SIGCONT.
+        # Start the watchdog before suspending. If this process dies between
+        # the two operations, closing the watchdog pipe still sends SIGCONT.
         self._watchdog = _start_watchdog(pid)
         try:
-            if state not in {"T", "t"}:
-                os.kill(pid, signal.SIGSTOP)
-                if not _wait_for_state(pid, stopped=True, timeout=self._timeout, interval=self._interval):
+            if not _status_is_stopped(proc):
+                proc.suspend()
+                if not _wait_for_state(proc, stopped=True, timeout=self._timeout, interval=self._interval):
                     raise NetworkManagerError("NetworkManager did not enter the stopped state")
             else:
                 LOG.warning("NetworkManager was already stopped; taking ownership of its resume")
-        except (OSError, NetworkManagerError) as exc:
+        except psutil.Error as exc:
             self._stop_watchdog()
-            if isinstance(exc, NetworkManagerError):
-                raise
             raise NetworkManagerError(f"could not suspend NetworkManager: {exc}") from exc
+        except NetworkManagerError:
+            self._stop_watchdog()
+            raise
 
         self._pid = pid
         self._register_atexit()
@@ -103,17 +104,18 @@ class NetworkManagerSuspension:
         self._pid = None
 
         try:
-            os.kill(pid, signal.SIGCONT)
-            if not _wait_for_state(pid, stopped=False, timeout=self._timeout, interval=self._interval):
+            proc = _process(pid)
+            if proc is None:
+                return
+            proc.resume()
+            if not _wait_for_state(proc, stopped=False, timeout=self._timeout, interval=self._interval):
                 LOG.warning("NetworkManager (pid %d) did not leave the stopped state", pid)
-        except ProcessLookupError:
-            pass
-        except OSError as exc:
+            LOG.info("resumed NetworkManager (pid %d)", pid)
+        except psutil.Error as exc:
             LOG.warning("could not resume NetworkManager: %s", exc)
         finally:
             self._unregister_atexit()
             self._stop_watchdog()
-            LOG.info("resumed NetworkManager (pid %d)", pid)
 
     def __enter__(self) -> "NetworkManagerSuspension":
         self.suspend()
@@ -172,53 +174,56 @@ def _read_pid(pidfile: Path) -> int | None:
 def _find_pid_by_name(name: str) -> int | None:
     """Fallback for distributions that do not write the NM pidfile."""
     try:
-        entries = Path("/proc").iterdir()
+        processes = psutil.process_iter(["pid", "name"])
     except OSError:
         return None
-    for entry in entries:
-        if not entry.name.isdigit():
-            continue
+    for proc in processes:
         try:
-            comm = (entry / "comm").read_text(encoding="ascii").strip()
-        except OSError:
+            if proc.info["name"] == name:
+                return int(proc.info["pid"])
+        except (psutil.Error, KeyError, TypeError, ValueError):
             continue
-        if comm == name:
-            return int(entry.name)
     return None
 
 
-def _process_state(pid: int) -> str | None:
-    try:
-        stat = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
-    except FileNotFoundError:
-        return None
-    except OSError as exc:
-        raise NetworkManagerError(f"cannot inspect pid {pid}: {exc}") from exc
-    # The comm field can contain spaces and parentheses. The state follows the
-    # last ')'.
-    try:
-        return stat.rsplit(")", 1)[1].split()[0]
-    except (IndexError, AttributeError):
-        return None
+def _process(pid: int) -> psutil.Process | None:
+    """Return a live process, or None when the pid no longer exists.
 
-
-def _process_name(pid: int) -> str | None:
+    ``psutil`` verifies the pid while sending signals, which protects against
+    pid reuse between the pidfile read and the suspend/resume call.
+    """
     try:
-        return Path(f"/proc/{pid}/comm").read_text(encoding="ascii").strip()
-    except FileNotFoundError:
+        proc = psutil.Process(pid)
+        proc.name()
+        return proc
+    except psutil.NoSuchProcess:
         return None
-    except OSError as exc:
+    except psutil.AccessDenied as exc:
         raise NetworkManagerError(f"cannot inspect pid {pid}: {exc}") from exc
 
 
-def _wait_for_state(pid: int, *, stopped: bool, timeout: float, interval: float) -> bool:
+def _process_name(proc: psutil.Process) -> str | None:
+    try:
+        return proc.name()
+    except psutil.NoSuchProcess:
+        return None
+    except psutil.AccessDenied as exc:
+        raise NetworkManagerError(f"cannot inspect pid {proc.pid}: {exc}") from exc
+
+
+def _status_is_stopped(proc: psutil.Process) -> bool:
+    try:
+        return proc.status() in {psutil.STATUS_STOPPED, psutil.STATUS_TRACING_STOP}
+    except psutil.NoSuchProcess:
+        return False
+    except psutil.AccessDenied as exc:
+        raise NetworkManagerError(f"cannot inspect pid {proc.pid}: {exc}") from exc
+
+
+def _wait_for_state(proc: psutil.Process, *, stopped: bool, timeout: float, interval: float) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        state = _process_state(pid)
-        if state is None:
-            return False
-        is_stopped = state in {"T", "t"}
-        if is_stopped == stopped:
+        if _status_is_stopped(proc) == stopped:
             return True
         time.sleep(interval)
     return False
