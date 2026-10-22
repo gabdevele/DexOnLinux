@@ -14,14 +14,19 @@ import asyncio
 import concurrent.futures
 import contextlib
 import logging
+import queue
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Protocol
 
 from dbus_fast import BusType, DBusError, Message, MessageType, Variant
 from dbus_fast.aio import MessageBus
 
+from dexonlinux.p2p.base import P2PError, Peer
 from dexonlinux.p2p.control import SupplicantError, p2p_ctrl_name
+from dexonlinux.p2p.events import P2PEvent
+from dexonlinux.p2p.wfd import WFD_IES
 
 LOG = logging.getLogger(__name__)
 
@@ -351,3 +356,182 @@ def _snake(name: str) -> str:
             out.append("_")
         out.append(char.lower())
     return "".join(out)
+
+
+@dataclass(frozen=True)
+class DBusWfdState:
+    """WFD-related supplicant state saved before ``prepare_wfd``."""
+
+    wfd_ies: bytes
+    go_intent: int
+    device_name: str
+    config_methods: str
+
+
+class WpaSupplicantDBus:
+    """``P2PControl`` backed by the official wpa_supplicant D-Bus API."""
+
+    def __init__(self, interface: str, client: DBusClient | None = None) -> None:
+        self.interface = interface
+        self._client = client or DBusFastClient()
+        self._device: str | None = None
+        self._group_interface: str | None = None
+        self._signals: queue.Queue[tuple[str, tuple[object, ...]]] = queue.Queue()
+        self._open = False
+
+    @property
+    def device(self) -> str | None:
+        return self._device
+
+    def open(self) -> None:
+        if self._open:
+            return
+        self._client.connect()
+        try:
+            self._device = self._client.find_p2p_device(self.interface)
+            self._client.probe(self._device)
+            self._client.subscribe(self._device, self._on_signal)
+        except SupplicantError:
+            self._client.close()
+            raise
+        self._open = True
+
+    def close(self) -> None:
+        self._client.close()
+        self._open = False
+        self._device = None
+        self._group_interface = None
+
+    def prepare_wfd(self, *, go_intent: int, device_name: str) -> DBusWfdState:
+        device = self._require_device()
+        config = self._client.get_property(device, P2P_IFACE, "P2PDeviceConfig")
+        if not isinstance(config, dict):
+            raise SupplicantError("P2PDeviceConfig is not a dictionary")
+        ies = self._client.get_property(ROOT_PATH, ROOT_IFACE, "WFDIEs")
+        methods = self._client.get_property(device, WPS_IFACE, "ConfigMethods")
+        state = DBusWfdState(
+            wfd_ies=ies if isinstance(ies, bytes) else b"",
+            go_intent=int(self._config_value(config, "GOIntent", 0)),
+            device_name=str(self._config_value(config, "DeviceName", "")),
+            config_methods=methods if isinstance(methods, str) else "",
+        )
+
+        try:
+            self._client.set_property(ROOT_PATH, ROOT_IFACE, "WFDIEs", "ay", WFD_IES)
+            self._client.set_property(
+                device,
+                P2P_IFACE,
+                "P2PDeviceConfig",
+                "a{sv}",
+                {
+                    "GOIntent": Variant("u", go_intent),
+                    "DeviceName": Variant("s", device_name),
+                },
+            )
+            self._client.set_property(device, WPS_IFACE, "ConfigMethods", "s", "0x80")
+        except SupplicantError as exc:
+            # A partial apply can leave WFD enabled or the name changed; put
+            # the supplicant back before the error reaches the caller.
+            self.restore_wfd(state)
+            raise P2PError(f"could not configure Wi-Fi Display: {exc}") from exc
+        return state
+
+    def restore_wfd(self, state: object) -> None:
+        if not isinstance(state, DBusWfdState):
+            LOG.debug("ignoring an unknown WFD state: %r", state)
+            return
+        device = self._device
+        if device is None:
+            return
+
+        self._best_effort(self.stop_extended_listen, "stop extended listen")
+        # An empty array disables Wi-Fi Display in the supplicant setter.
+        self._best_effort(
+            lambda: self._client.set_property(ROOT_PATH, ROOT_IFACE, "WFDIEs", "ay", state.wfd_ies),
+            "restore WFDIEs",
+        )
+        self._best_effort(
+            lambda: self._client.set_property(
+                device,
+                P2P_IFACE,
+                "P2PDeviceConfig",
+                "a{sv}",
+                {
+                    "GOIntent": Variant("u", state.go_intent),
+                    "DeviceName": Variant("s", state.device_name),
+                },
+            ),
+            "restore P2PDeviceConfig",
+        )
+        if state.config_methods:
+            self._best_effort(
+                lambda: self._client.set_property(
+                    device, WPS_IFACE, "ConfigMethods", "s", state.config_methods
+                ),
+                "restore ConfigMethods",
+            )
+
+    def start_extended_listen(self, period_ms: int, interval_ms: int) -> None:
+        self._client.call(
+            self._require_device(),
+            P2P_IFACE,
+            "ExtendedListen",
+            {"period": period_ms, "interval": interval_ms},
+        )
+
+    def stop_extended_listen(self) -> None:
+        self._client.call(self._require_device(), P2P_IFACE, "ExtendedListen", {})
+
+    def connect(self, peer: Peer, *, frequency: int, go_intent: int) -> None:
+        if not peer.path:
+            raise SupplicantError(
+                f"peer {peer.mac} has no D-Bus object path; the signal did not carry one"
+            )
+        self._client.call(
+            self._require_device(),
+            P2P_IFACE,
+            "Connect",
+            {
+                "peer": peer.path,
+                "wps_method": "pbc",
+                "frequency": frequency,
+                "go_intent": go_intent,
+            },
+        )
+
+    def disconnect(self) -> None:
+        interface = self._group_interface
+        if interface is None:
+            return
+        try:
+            self._client.call(interface, P2P_IFACE, "Disconnect")
+        finally:
+            self._group_interface = None
+
+    def pump(self, timeout: float) -> list[P2PEvent]:
+        try:
+            member, _args = self._signals.get(timeout=timeout)
+        except queue.Empty:
+            return []
+        LOG.debug("unmapped P2P signal %s", member)
+        return []
+
+    def _on_signal(self, member: str, args: tuple[object, ...]) -> None:
+        self._signals.put((member, args))
+
+    def _require_device(self) -> str:
+        if self._device is None:
+            raise SupplicantError("P2P control is not open")
+        return self._device
+
+    @staticmethod
+    def _config_value(config: dict[str, object], key: str, default: object) -> object:
+        value = config.get(key, default)
+        return value.value if isinstance(value, Variant) else value
+
+    @staticmethod
+    def _best_effort(action: Callable[[], None], description: str) -> None:
+        try:
+            action()
+        except SupplicantError as exc:
+            LOG.debug("%s failed: %s", description, exc)
