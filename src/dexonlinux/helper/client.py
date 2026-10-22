@@ -1,5 +1,3 @@
-"""User-side client for the privileged P2P helper."""
-
 import contextlib
 import json
 import logging
@@ -66,6 +64,8 @@ class HelperClient:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             bufsize=1,
             start_new_session=True,
         )

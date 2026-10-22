@@ -6,9 +6,8 @@ NetworkManager is not acceptable, so it is frozen with SIGSTOP for the P2P
 session and resumed on every exit path. SIGSTOP keeps the established station
 connection and wpa_supplicant running, so Wi-Fi internet stays usable.
 
-Observed with NetworkManager 1.46 (live evidence in
-``docs/research/2026-10-21-live-acceptance.md``). A separate watchdog process
-resumes NetworkManager if the helper is killed before it can clean up.
+A separate watchdog process resumes NetworkManager if the helper is killed
+before it can clean up.
 """
 
 import atexit
@@ -105,7 +104,8 @@ class NetworkManagerSuspension:
 
         try:
             os.kill(pid, signal.SIGCONT)
-            _wait_for_state(pid, stopped=False, timeout=self._timeout, interval=self._interval)
+            if not _wait_for_state(pid, stopped=False, timeout=self._timeout, interval=self._interval):
+                LOG.warning("NetworkManager (pid %d) did not leave the stopped state", pid)
         except ProcessLookupError:
             pass
         except OSError as exc:

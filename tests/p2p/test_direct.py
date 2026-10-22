@@ -274,3 +274,23 @@ def test_close_removes_group_and_restores_supplicant():
     assert link.watcher_stopped is True
     assert wfd.restored is True
     assert ctrl.closed is True
+
+
+def test_go_group_with_a_conflicting_address_fails_clearly():
+    ctrl = FakeCtrl(
+        events=[
+            'P2P-GROUP-STARTED p2p-wlp0s20-7 GO ssid="x" freq=2437 '
+            "ip_addr=192.168.49.1 ip_mask=255.255.255.0"
+        ]
+    )
+    backend = DirectBackend(
+        "wlp0s20f3",
+        ctrl,
+        FakeWfd(),
+        FakeLink(),
+        role=P2PRole.GO,
+        network=GroupNetwork("10.13.37.1", "10.13.37.2", 24),
+        dhcp=FakeDhcp(),
+    )
+    with pytest.raises(P2PError, match="does not match"):
+        backend.connect(stop=threading.Event(), timeout=1.0)

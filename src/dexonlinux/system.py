@@ -1,5 +1,3 @@
-"""Small subprocess adapter with explicit sudo handling."""
-
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -59,6 +57,8 @@ class SubprocessRunner:
             input=self._sudo_password if sudo else None,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             check=False,
         )
@@ -88,6 +88,8 @@ class SubprocessRunner:
             stdin=subprocess.PIPE if sudo else None,
             env=env,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         if sudo and process.stdin is not None:
             process.stdin.write(self._sudo_password)

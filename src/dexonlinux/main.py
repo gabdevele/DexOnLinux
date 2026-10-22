@@ -1,5 +1,3 @@
-"""DexOnLinux CLI: Wi-Fi Direct P2P, WFD RTSP and scrcpy."""
-
 import argparse
 import getpass
 import logging

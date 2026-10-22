@@ -1,4 +1,3 @@
-# tests/p2p/test_events.py
 from dexonlinux.p2p.base import P2PRole
 from dexonlinux.p2p.events import EventKind, parse_event
 
@@ -27,13 +26,13 @@ def test_parses_go_negotiation_password_id():
     assert event.passwd_id == 4
 
 
-def test_parses_go_negotiation_success_without_leading_mac():
+def test_parses_go_negotiation_success_uses_the_peer_device_address():
     event = parse_event(
         "P2P-GO-NEG-SUCCESS role=client freq=2437 ht40=0 "
-        "peer_dev=ce:f9:f0:2b:8a:cc peer_iface=ce:f9:f0:2b:0a:cc wps_method=PBC"
+        "peer_dev=ce:f9:f0:2b:8a:cc peer_iface=p2p-wlp0s20-7 wps_method=PBC"
     )
     assert event.kind is EventKind.GO_NEGOTIATION_SUCCESS
-    assert event.peer.mac == "ce:f9:f0:2b:0a:cc"
+    assert event.peer.mac == "ce:f9:f0:2b:8a:cc"
     assert event.passwd_id is None
     assert event.raw.startswith("P2P-GO-NEG-SUCCESS")
 

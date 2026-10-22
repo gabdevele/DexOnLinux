@@ -20,6 +20,8 @@ def test_run_builds_sudo_command_and_passes_password(monkeypatch):
     assert captured["kwargs"]["input"] == "secret\n"
     assert captured["kwargs"]["capture_output"] is True
     assert captured["kwargs"]["text"] is True
+    assert captured["kwargs"]["encoding"] == "utf-8"
+    assert captured["kwargs"]["errors"] == "replace"
     assert captured["kwargs"]["timeout"] is None
     assert result == CommandResult(("nmcli", "x"), 0, "ok\n", "")
 

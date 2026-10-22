@@ -1,9 +1,8 @@
 """Minimal RTSP plumbing for a Wi-Fi Display sink.
 
-Topology (see docs/research/2026-10-20-wfd-sink-without-miraclecast.md): the
-phone is the WFD source and runs the RTSP server; the laptop is the sink and
-the RTSP client. Only the control path matters here: RTP packets are drained
-and dropped.
+The phone is the WFD source and runs the RTSP server; the laptop is the sink
+and the RTSP client. Only the control path matters here: RTP packets are
+drained and dropped.
 """
 
 import contextlib
@@ -72,6 +71,7 @@ def parse_message(buffer: bytes) -> tuple[Message | None, bytes]:
         content_length = int(headers.get("content-length", "0"))
     except ValueError:
         content_length = 0
+    content_length = max(content_length, 0)
 
     if len(rest) < content_length:
         return None, buffer
@@ -255,15 +255,22 @@ class WfdSink:
                 break
 
     def _loop(self) -> None:
-        assert self._conn is not None
+        conn = self._connection()
         while not self._stop.is_set():
-            message = self._conn.read(READ_TIMEOUT)
+            message = conn.read(READ_TIMEOUT)
             if message is None:
                 continue
             if message.is_request:
                 self._handle_request(message)
             else:
                 LOG.debug("unexpected RTSP response: %s %s", message.status, message.reason)
+
+    def _connection(self) -> RtspConnection:
+        # Explicit guard instead of assert: asserts vanish under -O and give
+        # no diagnostic when a caller races the session teardown.
+        if self._conn is None:
+            raise RuntimeError("RTSP connection is not open")
+        return self._conn
 
     def _next_cseq(self) -> int:
         self._cseq += 1
@@ -276,14 +283,14 @@ class WfdSink:
         headers: dict[str, str] | None = None,
         timeout: float = 5.0,
     ) -> Message:
-        assert self._conn is not None
+        conn = self._connection()
         cseq = self._next_cseq()
-        self._conn.send(build_request(method, url, cseq, headers))
+        conn.send(build_request(method, url, cseq, headers))
         LOG.debug(">> %s %s (CSeq %d)", method, url, cseq)
 
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline and not self._stop.is_set():
-            message = self._conn.read(max(0.1, deadline - time.monotonic()))
+            message = conn.read(max(0.1, deadline - time.monotonic()))
             if message is None:
                 continue
             if message.is_request:
@@ -296,8 +303,8 @@ class WfdSink:
         raise TimeoutError(f"no RTSP response to {method} within {timeout:.1f}s")
 
     def _reply(self, request: Message, headers: dict[str, str] | None = None, body: bytes = b"") -> None:
-        assert self._conn is not None
-        self._conn.send(build_response(request.cseq, headers=headers, body=body))
+        conn = self._connection()
+        conn.send(build_response(request.cseq, headers=headers, body=body))
         LOG.debug(">> 200 OK (CSeq %s)", request.cseq)
 
     def _handle_request(self, message: Message) -> None:

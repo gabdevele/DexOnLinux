@@ -1,5 +1,3 @@
-"""Terminal interaction: colors, prompts, banners and packaged assets."""
-
 import logging
 from collections.abc import Callable, Sequence
 from importlib import resources
@@ -21,7 +19,7 @@ def set_color(enabled: bool) -> None:
 
 
 def colored(text: str, color: str = "", style: str = "") -> str:
-    if not _COLOR_ENABLED or not color:
+    if not _COLOR_ENABLED or not (color or style):
         return text
     return color + style + text + Style.RESET_ALL
 

@@ -1,5 +1,3 @@
-"""Read-only host probe for the direct WFD backend."""
-
 import logging
 import os
 import re
@@ -124,20 +122,28 @@ def probe_stack(
         if "type P2P-device" not in dev.stdout:
             reasons.append("the selected interface has no P2P device")
 
-    modes = _run(runner, ["iw", "list"])
-    if modes is None:
-        reasons.append("cannot read Wi-Fi capabilities with 'iw list'")
+    # Check the modes of the selected interface's own phy: another radio on
+    # the host advertising P2P must not make this interface look capable.
+    phy = _wiphy(runner, interface)
+    if phy is None:
+        capabilities = _run(runner, ["iw", "list"])
+        frequencies: list[int] = []
+        LOG.debug("could not resolve the phy of %s; using 'iw list' and skipping the frequency check", interface)
     else:
-        if "P2P-client" not in modes.stdout:
+        capabilities = _run(runner, ["iw", "phy", phy, "info"])
+        frequencies = parse_phy_frequencies(capabilities.stdout) if capabilities is not None else []
+        if capabilities is not None and not frequencies:
+            LOG.debug("could not parse any channel from 'iw phy %s info'; skipping the frequency check", phy)
+
+    if capabilities is None:
+        reasons.append("cannot read Wi-Fi capabilities")
+    else:
+        if "P2P-client" not in capabilities.stdout:
             reasons.append("driver does not advertise P2P-client mode")
-        if "P2P-GO" not in modes.stdout:
+        if "P2P-GO" not in capabilities.stdout:
             reasons.append("driver does not advertise P2P-GO mode")
 
     requested = freq if freq is not None else DEFAULT_P2P_FREQ
-    phy = _wiphy(runner, interface)
-    frequencies = _frequencies(runner, phy) if phy else []
-    if phy and not frequencies:
-        LOG.debug("could not parse any channel from 'iw phy %s info'; skipping the frequency check", phy)
     if frequencies and requested not in frequencies:
         suggestions = ", ".join(str(value) for value in frequencies[:_MAX_SUGGESTED_FREQUENCIES])
         reasons.append(
@@ -170,11 +176,6 @@ def _phy_from_info(info: CommandResult) -> str | None:
             value = stripped.split()[1]
             return value if value.startswith("phy") else f"phy{value}"
     return None
-
-
-def _frequencies(runner: Runner, phy: str) -> list[int]:
-    info = _run(runner, ["iw", "phy", phy, "info"])
-    return parse_phy_frequencies(info.stdout) if info is not None else []
 
 
 def _run(runner: Runner, args: list[str]) -> CommandResult | None:

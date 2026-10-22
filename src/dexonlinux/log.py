@@ -1,9 +1,3 @@
-"""Logging configuration for the user-facing CLI.
-
-The "dexonlinux" logger is configured once from the CLI arguments; library
-modules only call ``logging.getLogger(__name__)`` and never add handlers.
-"""
-
 import logging
 from pathlib import Path
 
@@ -54,7 +48,7 @@ def setup_logging(*, debug: bool = False, color: bool = True, log_file: str | Pa
     logger.addHandler(stream)
 
     if log_file is not None:
-        file_handler = logging.FileHandler(log_file)
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
         file_handler.setFormatter(logging.Formatter(DEBUG_LOG_FORMAT))
         file_handler.setLevel(logging.DEBUG)
         logger.addHandler(file_handler)

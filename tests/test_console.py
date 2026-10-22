@@ -21,6 +21,11 @@ def test_colored_wraps_with_reset_when_enabled():
     assert "\x1b[" in console.colored("text", console.Fore.RED)
 
 
+def test_colored_applies_style_without_a_color():
+    console.set_color(True)
+    assert "\x1b[" in console.colored("text", style=console.Style.BRIGHT)
+
+
 def test_asset_path_resolves_the_packaged_icon():
     path = console.asset_path("icon.png")
     assert path.name == "icon.png"

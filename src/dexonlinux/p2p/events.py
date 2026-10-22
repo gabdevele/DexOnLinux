@@ -1,5 +1,3 @@
-"""Parse wpa_supplicant P2P event lines into a small typed model."""
-
 import ipaddress
 import re
 from dataclasses import dataclass
@@ -18,7 +16,6 @@ _IP_MASK = re.compile(r"\bip_mask=([^\s\]]+)")
 _GO_IP = re.compile(r"\bgo_ip_addr=([^\s\]]+)")
 _GO_DEV = re.compile(r"\bgo_dev_addr=([^\s\]]+)")
 _PEER_DEV = re.compile(r"\bpeer_dev=([^\s]+)")
-_PEER_IFACE = re.compile(r"\bpeer_iface=([^\s]+)")
 
 
 class EventKind(Enum):
@@ -129,7 +126,7 @@ def parse_event(line: str) -> P2PEvent | None:
         )
 
     if line.startswith("P2P-GO-NEG-SUCCESS "):
-        peer_match = _PEER_IFACE.search(line) or _PEER_DEV.search(line)
+        peer_match = _PEER_DEV.search(line)
         if peer_match is None:
             return None
         return P2PEvent(

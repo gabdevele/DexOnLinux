@@ -1,5 +1,3 @@
-"""Core P2P types shared by the backends and the helper."""
-
 import ipaddress
 import threading
 from dataclasses import dataclass

@@ -1,5 +1,3 @@
-"""Small data types for ADB and scrcpy discovery."""
-
 from dataclasses import dataclass
 
 

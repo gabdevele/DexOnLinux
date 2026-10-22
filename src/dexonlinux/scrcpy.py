@@ -1,10 +1,7 @@
-"""scrcpy process lifecycle and display selection."""
-
 import logging
 import os
 import subprocess
 import threading
-import time
 
 from dexonlinux.console import asset_path, select_from_list
 from dexonlinux.device import Device
@@ -68,11 +65,20 @@ class ScrcpySession:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             env=env,
         )
-        time.sleep(0.2)
-        if process.poll() is not None:
-            raise CommandError("scrcpy exited immediately after startup")
+        try:
+            process.wait(timeout=0.2)
+        except subprocess.TimeoutExpired:
+            pass
+        else:
+            output = process.stdout.read() if process.stdout is not None else ""
+            detail = output.strip()
+            message = f"scrcpy exited immediately after startup (code {process.returncode})"
+            raise CommandError(f"{message}: {detail[-500:]}" if detail else message)
+
         self._process = process
         self._drain_thread = threading.Thread(target=self._drain, args=(process,), daemon=True)
         self._drain_thread.start()

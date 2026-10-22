@@ -1,5 +1,3 @@
-"""User-side session orchestration: helper group -> RTSP -> scrcpy."""
-
 import logging
 import threading
 from collections.abc import Callable

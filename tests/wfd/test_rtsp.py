@@ -2,6 +2,8 @@ import socket
 import threading
 import time
 
+import pytest
+
 from dexonlinux.wfd.rtsp import (
     RTSP_PORT,
     Message,
@@ -140,3 +142,34 @@ def test_stop_closes_the_session_without_a_socket_race():
     runner.join(timeout=3.0)
     assert runner.is_alive() is False
     assert [name for name, _ in events] == ["connected", "disconnected"]
+
+
+def test_negative_content_length_does_not_swallow_the_next_message():
+    raw = (
+        b"RTSP/1.0 200 OK\r\nCSeq: 1\r\nContent-Length: -5\r\n\r\n"
+        b"RTSP/1.0 200 OK\r\nCSeq: 2\r\n\r\n"
+    )
+    first, rest = parse_message(raw)
+    assert first is not None and first.cseq == "1" and first.body == b""
+
+    second, rest = parse_message(rest)
+    assert second is not None and second.cseq == "2"
+    assert rest == b""
+
+
+def test_request_without_a_connection_raises_a_clear_error():
+    sink = WfdSink("127.0.0.1", RTSP_PORT)
+    with pytest.raises(RuntimeError, match="not open"):
+        sink._request("OPTIONS", "*")
+
+
+def test_reply_without_a_connection_raises_a_clear_error():
+    sink = WfdSink("127.0.0.1", RTSP_PORT)
+    with pytest.raises(RuntimeError, match="not open"):
+        sink._reply(Message(is_request=True, method="OPTIONS", url="*"))
+
+
+def test_loop_without_a_connection_raises_a_clear_error():
+    sink = WfdSink("127.0.0.1", RTSP_PORT)
+    with pytest.raises(RuntimeError, match="not open"):
+        sink._loop()

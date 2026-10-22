@@ -30,10 +30,12 @@ def outputs(
     }
     if wiphy:
         commands[("iw", "dev", "wlp0s20f3", "info")] = "Interface wlp0s20f3\n\twiphy 2\n"
-    if frequencies is not None:
-        commands[("iw", "phy", "phy2", "info")] = "Frequencies:\n" + "".join(
-            f"\t\t* {value} MHz [{index}] (20.0 dBm)\n" for index, value in enumerate(frequencies, start=1)
-        )
+        capabilities = " * P2P-client\n * P2P-GO\n" if modes else " * managed\n"
+        if frequencies is not None:
+            capabilities += "Frequencies:\n" + "".join(
+                f"\t\t* {value} MHz [{index}] (20.0 dBm)\n" for index, value in enumerate(frequencies, start=1)
+            )
+        commands[("iw", "phy", "phy2", "info")] = capabilities
     return commands
 
 
@@ -122,6 +124,17 @@ def test_missing_p2p_modes_is_unsupported(tmp_path):
     assert "P2P-client" in " ".join(report.reasons)
 
 
+def test_another_phy_supporting_p2p_does_not_mask_the_selected_interface(tmp_path):
+    (tmp_path / "p2p-dev-wlp0s20").touch()
+    commands = outputs()
+    commands[("iw", "phy", "phy2", "info")] = " * managed\n"
+    commands[("iw", "list")] = "Supported interface modes:\n * P2P-client\n * P2P-GO\n"
+    report = probe_stack(FakeRunner(commands), "wlp0s20f3", ctrl_dir=tmp_path, which=which_all)
+
+    assert report.supported is False
+    assert "P2P-client" in " ".join(report.reasons)
+
+
 def test_missing_session_commands_is_unsupported(tmp_path):
     (tmp_path / "p2p-dev-wlp0s20").touch()
 
@@ -196,7 +209,9 @@ def test_unparseable_channel_list_skips_the_check_with_a_note(tmp_path, monkeypa
     monkeypatch.setattr("dexonlinux.doctor.LOG.debug", lambda template, *args: notes.append(template % args))
     (tmp_path / "p2p-dev-wlp0s20").touch()
     outputs_map = outputs(frequencies=None)
-    outputs_map[("iw", "phy", "phy2", "info")] = "Frequencies:\n\t* 2402 - 2482 MHz (20.0 dBm)\n"
+    outputs_map[("iw", "phy", "phy2", "info")] = (
+        " * P2P-client\n * P2P-GO\nFrequencies:\n\t* 2402 - 2482 MHz (20.0 dBm)\n"
+    )
     report = probe_stack(FakeRunner(outputs_map), "wlp0s20f3", ctrl_dir=tmp_path, which=which_all)
 
     assert report.supported is True

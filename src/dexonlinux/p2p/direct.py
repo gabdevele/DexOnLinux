@@ -1,5 +1,3 @@
-"""Direct wpa_supplicant P2P backend."""
-
 import logging
 import threading
 import time
@@ -10,8 +8,8 @@ from dexonlinux.p2p.base import DEFAULT_P2P_FREQ, GO_NETWORK, GroupInfo, GroupNe
 from dexonlinux.p2p.dhcp import DhcpServer
 from dexonlinux.p2p.events import EventKind, parse_event
 from dexonlinux.p2p.link import LinkConfigurator
-from dexonlinux.p2p.supplicant import SupplicantControl
-from dexonlinux.p2p.wfd import WfdConfigurator
+from dexonlinux.p2p.supplicant import SupplicantControl, SupplicantError
+from dexonlinux.p2p.wfd import WfdConfigurator, WfdState
 
 LOG = logging.getLogger(__name__)
 
@@ -43,7 +41,7 @@ class DirectBackend:
         self._dhcp = dhcp
         self._before_group = before_group
         self._before_group_done = False
-        self._state = None
+        self._state: WfdState | None = None
         self.group_ifname: str | None = None
         self._pending_peer: str | None = None
         self._pending_until = 0.0
@@ -106,8 +104,13 @@ class DirectBackend:
                 raise P2PError("phone negotiated the laptop as GO; client role was requested")
             if self._dhcp is None:
                 raise P2PError("laptop is the GO but no DHCP server is configured")
-            local_ip = group.local_ip or self._network.server_ip
-            prefix = group.local_prefix if group.local_ip else self._network.prefix
+            if group.local_ip is not None and group.local_ip != self._network.server_ip:
+                raise P2PError(
+                    f"negotiated GO address {group.local_ip} does not match the configured network "
+                    f"{self._network.server_ip}/{self._network.prefix}"
+                )
+            local_ip = self._network.server_ip
+            prefix = self._network.prefix
             self._link.configure(group.ifname, f"{local_ip}/{prefix}")
             self._dhcp.start(group.ifname)
             LOG.info("P2P GO %s up with %s/%d, peer lease %s", group.ifname, local_ip, prefix, self._dhcp.peer_ip)
@@ -155,7 +158,10 @@ class DirectBackend:
             if self._dhcp is not None:
                 self._dhcp.stop()
             if group:
-                self._ctrl.command(f"P2P_GROUP_REMOVE {group}")
+                try:
+                    self._ctrl.command(f"P2P_GROUP_REMOVE {group}")
+                except SupplicantError as exc:
+                    LOG.debug("could not ask the supplicant to remove %s: %s", group, exc)
                 try:
                     self._link.remove(group)
                 except Exception as exc:  # noqa: BLE001 - best-effort cleanup

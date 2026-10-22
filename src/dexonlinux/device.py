@@ -1,5 +1,3 @@
-"""ADB device and scrcpy display discovery."""
-
 import re
 
 from dexonlinux.models import AdbDevice, ScrcpyDisplay
