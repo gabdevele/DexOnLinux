@@ -13,6 +13,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import asdict
 
+from dexonlinux.netlink import Pyroute2LinkOps
 from dexonlinux.nm import NetworkManagerSuspension
 from dexonlinux.p2p.base import DEFAULT_P2P_FREQ, GroupInfo, P2PBackend, P2PError, P2PRole
 from dexonlinux.p2p.dhcp import DhcpServer
@@ -113,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
             args.interface,
             ctrl,
             WfdConfigurator(go_intent=role.go_intent),
-            LinkConfigurator(SubprocessRunner()),
+            LinkConfigurator(Pyroute2LinkOps(), SubprocessRunner()),
             role=role,
             frequency=args.p2p_freq,
             dhcp=DhcpServer() if role is P2PRole.GO else None,

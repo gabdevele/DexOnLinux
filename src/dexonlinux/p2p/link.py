@@ -6,11 +6,12 @@ bounded watcher raises it during GO negotiation; the address is added only
 after GROUP-STARTED.
 """
 
+import ipaddress
 import logging
-import os
 import threading
 import time
 
+from dexonlinux.netlink import LinkError, LinkOps
 from dexonlinux.system import Runner
 
 LOG = logging.getLogger(__name__)
@@ -19,13 +20,13 @@ LOG = logging.getLogger(__name__)
 class LinkConfigurator:
     def __init__(
         self,
+        ops: LinkOps,
         runner: Runner,
         *,
-        net_dir: str = "/sys/class/net",
         interval: float = 0.05,
     ) -> None:
+        self._ops = ops
         self._runner = runner
-        self._net_dir = net_dir
         self._interval = interval
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -33,7 +34,8 @@ class LinkConfigurator:
     def configure(self, ifname: str, cidr: str) -> None:
         # Do not touch IFF_UP here: the watcher owns it, and toggling the link
         # after association can make some drivers drop the client.
-        self._runner.run(["ip", "addr", "replace", cidr, "dev", ifname])
+        interface = ipaddress.ip_interface(cidr)
+        self._ops.add_address(ifname, str(interface.ip), interface.network.prefixlen)
 
     def remove(self, ifname: str) -> None:
         # The phone may have removed the group first; that is not an error.
@@ -41,24 +43,15 @@ class LinkConfigurator:
 
     def remove_stale(self) -> None:
         """Remove P2P group links left by a previous failed session."""
-        result = self._runner.run(["iw", "dev"], check=False)
-        if result.returncode != 0:
-            LOG.warning("could not inspect P2P interfaces: %s", result.stderr.strip())
+        try:
+            names = self._ops.list_links()
+        except LinkError as exc:
+            LOG.warning("could not inspect P2P interfaces: %s", exc)
             return
 
-        current = ""
-        stale: list[str] = []
-        for line in result.stdout.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("Interface "):
-                current = stripped.split()[1]
-            elif (
-                stripped in {"type P2P-client", "type P2P-GO"}
-                and current.startswith("p2p-")
-                and not current.startswith("p2p-dev-")
-            ):
-                stale.append(current)
-        for ifname in stale:
+        for ifname in names:
+            if not ifname.startswith("p2p-") or ifname.startswith("p2p-dev-"):
+                continue
             LOG.info("removing stale P2P group interface %s", ifname)
             self._runner.run(["iw", "dev", ifname, "del"], check=False)
 
@@ -83,22 +76,21 @@ class LinkConfigurator:
     def _watch(self, deadline: float) -> None:
         while not self._stop.is_set() and time.monotonic() < deadline:
             try:
-                names = os.listdir(self._net_dir)
-            except OSError:
+                names = self._ops.list_links()
+            except LinkError as exc:
+                LOG.debug("link watcher could not list interfaces: %s", exc)
                 names = []
             for ifname in names:
                 if not ifname.startswith("p2p-") or ifname.startswith("p2p-dev-"):
                     continue
-                if self._is_link_up(ifname):
+                try:
+                    if self._ops.is_up(ifname):
+                        continue
+                    self._ops.set_up(ifname)
+                except LinkError as exc:
+                    # The group may disappear while it is being negotiated;
+                    # keep watching the remaining interfaces.
+                    LOG.debug("link watcher skipped %s: %s", ifname, exc)
                     continue
-                self._runner.run(["ip", "link", "set", "dev", ifname, "up"], check=False)
-                if self._is_link_up(ifname):
-                    LOG.info("pre-upped P2P group interface %s", ifname)
+                LOG.info("pre-upped P2P group interface %s", ifname)
             self._stop.wait(self._interval)
-
-    def _is_link_up(self, ifname: str) -> bool:
-        try:
-            with open(f"{self._net_dir}/{ifname}/flags", encoding="ascii") as handle:
-                return bool(int(handle.read().strip(), 16) & 0x1)
-        except (OSError, ValueError):
-            return False

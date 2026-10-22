@@ -1,83 +1,98 @@
 import time
 
+from dexonlinux.netlink import LinkError
 from dexonlinux.p2p.link import LinkConfigurator
 from dexonlinux.system import CommandResult
 
 
 class FakeRunner:
-    def __init__(self, output=""):
+    def __init__(self, returncode=0):
         self.calls = []
-        self.output = output
+        self.returncode = returncode
 
     def run(self, args, *, sudo=False, check=True, timeout=None):
         self.calls.append((tuple(args), sudo))
-        return CommandResult(tuple(args), 0, self.output, "")
+        return CommandResult(tuple(args), self.returncode, "", "")
 
 
-class LinkFakeRunner:
-    def __init__(self, flags_path):
-        self.flags_path = flags_path
-        self.calls = []
+class FakeLinkOps:
+    def __init__(self, links=None, *, fail_list=False):
+        self.links = {
+            name: {"index": index, "flags": flags}
+            for index, (name, flags) in enumerate((links or {}).items(), start=1)
+        }
+        self.fail_list = fail_list
+        self.addresses = []
+        self.ups = []
 
-    def run(self, args, *, sudo=False, check=True, timeout=None):
-        command = tuple(args)
-        self.calls.append((command, sudo))
-        if command[:4] == ("ip", "link", "set", "dev"):
-            self.flags_path.write_text("0x1003\n", encoding="ascii")
-        return CommandResult(command, 0, "", "")
+    def add_address(self, ifname, address, prefixlen):
+        if ifname not in self.links:
+            raise LinkError(f"interface {ifname} does not exist")
+        self.addresses.append((ifname, address, prefixlen))
+
+    def set_up(self, ifname):
+        if ifname not in self.links:
+            raise LinkError(f"interface {ifname} does not exist")
+        self.ups.append(ifname)
+        self.links[ifname]["flags"] |= 0x1
+
+    def is_up(self, ifname):
+        if ifname not in self.links:
+            raise LinkError(f"interface {ifname} does not exist")
+        return bool(self.links[ifname]["flags"] & 0x1)
+
+    def list_links(self):
+        if self.fail_list:
+            raise LinkError("netlink unavailable")
+        return list(self.links)
 
 
-def test_configure_only_adds_address():
+def test_configure_adds_address_with_pyroute2():
+    ops = FakeLinkOps({"p2p-wlp0s20-7": 0x1002})
+    LinkConfigurator(ops, FakeRunner()).configure("p2p-wlp0s20-7", "192.168.49.200/24")
+
+    assert ops.addresses == [("p2p-wlp0s20-7", "192.168.49.200", 24)]
+
+
+def test_remove_still_uses_iw_dev_del():
     runner = FakeRunner()
-    LinkConfigurator(runner).configure("p2p-wlp0s20-7", "192.168.49.200/24")
-    assert runner.calls == [
-        (("ip", "addr", "replace", "192.168.49.200/24", "dev", "p2p-wlp0s20-7"), False),
-    ]
+    LinkConfigurator(FakeLinkOps(), runner).remove("p2p-wlp0s20-7")
 
-
-def test_remove_uses_iw_dev_del():
-    runner = FakeRunner()
-    LinkConfigurator(runner).remove("p2p-wlp0s20-7")
     assert runner.calls == [(("iw", "dev", "p2p-wlp0s20-7", "del"), False)]
 
 
-def test_remove_stale_deletes_only_group_links():
-    runner = FakeRunner(
-        "phy#0\n"
-        "\tInterface p2p-wlp0s20-1\n"
-        "\t\ttype P2P-client\n"
-        "\tInterface p2p-dev-wlp0s20\n"
-        "\t\ttype P2P-device\n"
-        "\tInterface wlp0s20f3\n"
-        "\t\ttype managed\n"
+def test_remove_stale_deletes_only_p2p_group_links():
+    ops = FakeLinkOps(
+        {
+            "p2p-wlp0s20-1": 0x1002,
+            "p2p-dev-wlp0s20": 0x1003,
+            "wlp0s20f3": 0x1003,
+        }
     )
-    LinkConfigurator(runner).remove_stale()
-    assert [call[0] for call in runner.calls] == [
-        ("iw", "dev"),
-        ("iw", "dev", "p2p-wlp0s20-1", "del"),
-    ]
+    runner = FakeRunner()
+    LinkConfigurator(ops, runner).remove_stale()
+
+    assert runner.calls == [(("iw", "dev", "p2p-wlp0s20-1", "del"), False)]
 
 
-def test_watcher_pre_ups_new_group_link_and_skips_p2p_dev(tmp_path):
-    group = tmp_path / "p2p-wlp0s20-9"
-    group.mkdir()
-    flags = group / "flags"
-    flags.write_text("0x1002\n", encoding="ascii")
-    (tmp_path / "p2p-dev-wlp0s20").mkdir()
+def test_remove_stale_tolerates_an_unavailable_netlink():
+    ops = FakeLinkOps(fail_list=True)
+    runner = FakeRunner()
+    LinkConfigurator(ops, runner).remove_stale()
 
-    runner = LinkFakeRunner(flags)
-    link = LinkConfigurator(runner, net_dir=str(tmp_path), interval=0.005)
+    assert runner.calls == []
+
+
+def test_watcher_pre_ups_new_group_link_and_skips_p2p_dev():
+    ops = FakeLinkOps({"p2p-wlp0s20-9": 0x1002, "p2p-dev-wlp0s20": 0x1003})
+    link = LinkConfigurator(ops, FakeRunner(), interval=0.005)
     link.start_watcher(timeout=1.0)
     try:
         deadline = time.monotonic() + 1.0
-        while time.monotonic() < deadline:
-            if any(call[0][:4] == ("ip", "link", "set", "dev") for call in runner.calls):
-                break
+        while time.monotonic() < deadline and not ops.ups:
             time.sleep(0.005)
     finally:
         link.stop_watcher()
 
-    commands = [call[0] for call in runner.calls]
-    assert ("ip", "link", "set", "dev", "p2p-wlp0s20-9", "up") in commands
-    assert all("p2p-dev-wlp0s20" not in command for command in commands)
-    assert all(command[:3] != ("ip", "addr", "replace") for command in commands)
+    assert ops.ups == ["p2p-wlp0s20-9"]
+    assert ops.addresses == []
