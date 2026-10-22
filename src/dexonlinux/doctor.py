@@ -7,13 +7,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from dexonlinux.p2p.base import DEFAULT_P2P_FREQ
+from dexonlinux.p2p.dbus import DBusProbe, probe_dbus
 from dexonlinux.system import CommandResult, Runner
 
 LOG = logging.getLogger(__name__)
 
 CTRL_DIR = Path("/run/wpa_supplicant")
 NET_DIR = Path("/sys/class/net")
-REQUIRED_COMMANDS = ("sudo", "iw", "ip", "adb", "scrcpy")
+REQUIRED_COMMANDS = ("sudo", "iw", "adb", "scrcpy")
 _MAX_SUGGESTED_FREQUENCIES = 12
 _FREQUENCY = re.compile(r"^\s*\*\s*(\d+)\s*MHz")
 
@@ -25,6 +26,8 @@ class StackReport:
     supported: bool
     reasons: tuple[str, ...]
     suspend_nm: bool = False
+    transport: str = "none"
+    notes: tuple[str, ...] = ()
 
 
 def list_p2p_interfaces(
@@ -81,6 +84,7 @@ def probe_stack(
     freq: int | None = None,
     ctrl_dir: Path = CTRL_DIR,
     which: Callable[[str], str | None] = shutil.which,
+    dbus_probe: Callable[[str], DBusProbe] = probe_dbus,
 ) -> StackReport:
     """Inspect the host without changing it.
 
@@ -94,6 +98,7 @@ def probe_stack(
     connman_active = _service_active(runner, "connman")
 
     reasons: list[str] = []
+    notes: list[str] = []
     manager = "NetworkManager" if nm_active else "standalone"
     suspend_nm = nm_active
 
@@ -102,16 +107,7 @@ def probe_stack(
     if connman_active:
         reasons.append("network stack: ConnMan is not supported in v1")
 
-    ctrl_path = Path(ctrl_dir)
-    if not ctrl_path.exists():
-        reasons.append(f"no P2P control directory at {ctrl_dir}; is Wi-Fi Direct enabled?")
-    elif os.access(ctrl_path, os.R_OK | os.X_OK):
-        ctrl_sockets = [path for path in ctrl_path.glob("p2p-dev-*") if path.exists()]
-        if not ctrl_sockets:
-            reasons.append(f"no P2P control socket in {ctrl_dir}; is Wi-Fi Direct enabled?")
-    # If the directory is root-only, the unprivileged doctor cannot inspect it;
-    # the privileged helper will validate the socket. Do not report a false
-    # negative just because the CLI is not running as root.
+    transport = _select_transport(dbus_probe(interface), ctrl_dir, reasons, notes)
 
     dev = _run(runner, ["iw", "dev"])
     if dev is None:
@@ -161,7 +157,54 @@ def probe_stack(
         supported=not reasons,
         reasons=tuple(reasons),
         suspend_nm=suspend_nm,
+        transport=transport,
+        notes=tuple(notes),
     )
+
+
+def _select_transport(
+    probe: DBusProbe,
+    ctrl_dir: Path,
+    reasons: list[str],
+    notes: list[str],
+) -> str:
+    """Pick the transport doctor should report, without changing the host."""
+    ctrl_state = _ctrl_socket_state(ctrl_dir)
+
+    if probe.available is True:
+        return "dbus"
+    if probe.available is None:
+        notes.append(
+            f"cannot verify the D-Bus API as this user ({probe.detail}); "
+            "the privileged helper will check it"
+        )
+        return "unknown"
+    if ctrl_state is True:
+        notes.append(f"D-Bus unavailable ({probe.detail}); using the control socket")
+        return "ctrl"
+    if ctrl_state is None:
+        notes.append(
+            f"D-Bus unavailable ({probe.detail}) and {ctrl_dir} is not readable "
+            "as this user; the privileged helper will check it"
+        )
+        return "unknown"
+
+    reasons.append(
+        f"no usable P2P transport: D-Bus unavailable ({probe.detail}) "
+        f"and no control socket in {ctrl_dir}"
+    )
+    return "none"
+
+
+def _ctrl_socket_state(ctrl_dir: Path) -> bool | None:
+    path = Path(ctrl_dir)
+    if not path.exists():
+        return False
+    if not os.access(path, os.R_OK | os.X_OK):
+        # A root-only directory tells an unprivileged doctor nothing; the
+        # helper will validate it.
+        return None
+    return any(path.glob("p2p-dev-*"))
 
 
 def _wiphy(runner: Runner, interface: str) -> str | None:

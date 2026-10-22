@@ -1,7 +1,11 @@
 import threading
 
+import pytest
+
+from dexonlinux.helper import service
 from dexonlinux.helper.service import serve
 from dexonlinux.p2p.base import GroupInfo, P2PError, P2PRole
+from dexonlinux.p2p.control import SupplicantError
 
 
 def client_group() -> GroupInfo:
@@ -87,3 +91,84 @@ def test_serve_reports_backend_error():
     assert events[-1][0] == "error"
     assert "PIN" in events[-1][1]["message"]
     assert backend.closed is True
+
+
+def test_open_control_prefers_dbus(monkeypatch):
+    class FakeDBus:
+        def __init__(self, interface):
+            self.interface = interface
+            self.opened = False
+
+        def open(self):
+            self.opened = True
+
+    monkeypatch.setattr(service, "WpaSupplicantDBus", FakeDBus)
+    monkeypatch.setattr(service, "SupplicantControl", lambda path: pytest.fail("ctrl must not be used"))
+
+    control, name = service.open_control("wlan0", "auto")
+
+    assert name == "dbus"
+    assert isinstance(control, FakeDBus)
+    assert control.opened is True
+
+
+def test_open_control_falls_back_to_ctrl(monkeypatch):
+    class FailingDBus:
+        def __init__(self, interface):
+            pass
+
+        def open(self):
+            raise SupplicantError("no WFDIEs")
+
+    class FakeCtrl:
+        def __init__(self, path):
+            self.path = path
+
+        def open(self):
+            pass
+
+    monkeypatch.setattr(service, "WpaSupplicantDBus", FailingDBus)
+    monkeypatch.setattr(service, "find_ctrl_socket", lambda interface: "/tmp/p2p-dev")
+    monkeypatch.setattr(service, "SupplicantControl", FakeCtrl)
+
+    control, name = service.open_control("wlan0", "auto")
+
+    assert name == "ctrl"
+    assert isinstance(control, FakeCtrl)
+
+
+def test_open_control_reports_both_errors(monkeypatch):
+    class FailingDBus:
+        def __init__(self, interface):
+            pass
+
+        def open(self):
+            raise SupplicantError("no WFDIEs")
+
+    class FailingCtrl:
+        def __init__(self, path):
+            pass
+
+        def open(self):
+            raise SupplicantError("no socket")
+
+    monkeypatch.setattr(service, "WpaSupplicantDBus", FailingDBus)
+    monkeypatch.setattr(service, "find_ctrl_socket", lambda interface: "/tmp/p2p-dev")
+    monkeypatch.setattr(service, "SupplicantControl", FailingCtrl)
+
+    with pytest.raises(SupplicantError, match="D-Bus: no WFDIEs; control socket: no socket"):
+        service.open_control("wlan0", "auto")
+
+
+def test_explicit_dbus_does_not_fall_back(monkeypatch):
+    class FailingDBus:
+        def __init__(self, interface):
+            pass
+
+        def open(self):
+            raise SupplicantError("no WFDIEs")
+
+    monkeypatch.setattr(service, "WpaSupplicantDBus", FailingDBus)
+
+    with pytest.raises(SupplicantError, match="no WFDIEs"):
+        service.open_control("wlan0", "dbus")

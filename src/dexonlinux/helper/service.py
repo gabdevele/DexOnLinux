@@ -16,6 +16,8 @@ from dataclasses import asdict
 from dexonlinux.netlink import Pyroute2LinkOps
 from dexonlinux.nm import NetworkManagerSuspension
 from dexonlinux.p2p.base import DEFAULT_P2P_FREQ, GroupInfo, P2PBackend, P2PError, P2PRole
+from dexonlinux.p2p.control import P2PControl
+from dexonlinux.p2p.dbus import WpaSupplicantDBus
 from dexonlinux.p2p.dhcp import DhcpServer
 from dexonlinux.p2p.direct import DirectBackend
 from dexonlinux.p2p.link import LinkConfigurator
@@ -29,6 +31,35 @@ Emitter = Callable[[str, dict[str, object]], None]
 
 def emit(event: str, data: dict[str, object]) -> None:
     print(json.dumps({"event": event, "data": data}, separators=(",", ":")), flush=True)
+
+
+def open_control(interface: str, transport: str) -> tuple[P2PControl, str]:
+    """Open the requested P2P transport and return it with its name.
+
+    ``auto`` prefers D-Bus and only falls back to the control socket when the
+    D-Bus API is missing or unusable. ``dbus`` never falls back, so a caller
+    that explicitly asked for it sees the real error.
+    """
+    dbus_error: SupplicantError | None = None
+    if transport != "ctrl":
+        dbus = WpaSupplicantDBus(interface)
+        try:
+            dbus.open()
+            return dbus, "dbus"
+        except SupplicantError as exc:
+            if transport == "dbus":
+                raise
+            dbus_error = exc
+            LOG.warning("D-Bus transport unavailable (%s); falling back to the control socket", exc)
+
+    ctrl = SupplicantControl(find_ctrl_socket(interface))
+    try:
+        ctrl.open()
+    except SupplicantError as exc:
+        if dbus_error is not None:
+            raise SupplicantError(f"D-Bus: {dbus_error}; control socket: {exc}") from exc
+        raise
+    return ctrl, "ctrl"
 
 
 def serve(
@@ -74,6 +105,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--interface", required=True)
     parser.add_argument("--backend", choices=["direct"], default="direct")
     parser.add_argument(
+        "--p2p-transport",
+        choices=["auto", "dbus", "ctrl"],
+        default="auto",
+        help="P2P transport: auto prefers D-Bus and falls back to the control socket.",
+    )
+    parser.add_argument(
         "--role",
         choices=[role.value for role in P2PRole],
         default=P2PRole.GO.value,
@@ -104,12 +141,12 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         role = P2PRole(args.role)
-        ctrl = SupplicantControl(find_ctrl_socket(args.interface))
+        control, transport = open_control(args.interface, args.p2p_transport)
         suspension = NetworkManagerSuspension(args.suspend_nm)
         backend = DirectBackend(
             args.interface,
-            ctrl,
-            WfdConfigurator(go_intent=role.go_intent),
+            control,
+            WfdConfigurator(),
             LinkConfigurator(Pyroute2LinkOps(), SubprocessRunner()),
             role=role,
             frequency=args.p2p_freq,
@@ -121,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        return serve(backend, stop, emit, args.backend, args.interface, "ctrl")
+        return serve(backend, stop, emit, args.backend, args.interface, transport)
     finally:
         suspension.resume()
 

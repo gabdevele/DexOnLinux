@@ -47,6 +47,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="MHZ",
         help="P2P operating frequency in MHz (default: 2437). --doctor validates it against the adapter.",
     )
+    parser.add_argument(
+        "--p2p-transport",
+        choices=["auto", "dbus", "ctrl"],
+        default="auto",
+        help="P2P transport: auto prefers D-Bus and falls back to the control socket.",
+    )
     parser.add_argument("--doctor", action="store_true", help="Check the host stack and exit.")
     parser.add_argument("--debug", action="store_true", help="Show debug logs.")
     parser.add_argument("--no-color", action="store_true", help="Disable colored terminal output.")
@@ -129,7 +135,10 @@ def print_report(interface: str, report: StackReport) -> None:
     print(f"Interface: {interface}")
     print(f"Network stack: {report.manager}")
     print(f"P2P backend: {report.backend}")
+    print(f"P2P transport: {report.transport}")
     print(f"Pause NetworkManager: {'yes' if report.suspend_nm else 'no'}")
+    for note in report.notes:
+        print(colored(f"  note: {note}", Fore.LIGHTYELLOW_EX))
     if report.supported:
         print(colored("Supported: yes", Fore.LIGHTGREEN_EX))
     else:
@@ -203,6 +212,7 @@ def run(args: argparse.Namespace) -> int:
         frequency=args.p2p_freq,
         suspend_nm=report.suspend_nm,
         sudo_password=sudo_password,
+        transport=args.p2p_transport,
     )
     try:
         scrcpy = ScrcpySession(

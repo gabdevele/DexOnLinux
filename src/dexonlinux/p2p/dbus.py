@@ -244,7 +244,19 @@ class DBusFastClient:
             future.cancel()
             raise SupplicantError(f"D-Bus call timed out after {effective:.1f}s") from exc
         except DBusError as exc:
-            raise SupplicantError(f"{exc.type}: {exc.text}") from exc
+            error_name = str(exc.type)
+            if error_name in {
+                "org.freedesktop.DBus.Error.AccessDenied",
+                "org.freedesktop.DBus.Error.AuthFailed",
+            }:
+                raise DBusPermissionDenied(f"{error_name}: {exc.text}") from exc
+            if error_name in {
+                "org.freedesktop.DBus.Error.ServiceUnknown",
+                "org.freedesktop.DBus.Error.NameHasNoOwner",
+                "org.freedesktop.DBus.Error.FileNotFound",
+            }:
+                raise DBusUnavailable(f"{error_name}: {exc.text}") from exc
+            raise SupplicantError(f"{error_name}: {exc.text}") from exc
         except OSError as exc:
             raise SupplicantError(f"D-Bus I/O error: {exc}") from exc
 
@@ -693,3 +705,29 @@ def _prefix(mask: object) -> int:
         netmask = ipaddress.IPv4Address(bytes(mask))
         return ipaddress.IPv4Network(f"0.0.0.0/{netmask}").prefixlen
     return 24
+
+
+@dataclass(frozen=True)
+class DBusProbe:
+    """Result of a read-only D-Bus capability check.
+
+    ``available`` is ``None`` when the check could not be performed, for
+    example when an unprivileged doctor is not allowed to read the
+    supplicant's properties. The privileged helper then makes the call.
+    """
+
+    available: bool | None
+    detail: str = ""
+
+
+def probe_dbus(interface: str) -> DBusProbe:
+    control = WpaSupplicantDBus(interface)
+    try:
+        control.open()
+    except DBusPermissionDenied as exc:
+        return DBusProbe(None, str(exc))
+    except SupplicantError as exc:
+        return DBusProbe(False, str(exc))
+    finally:
+        control.close()
+    return DBusProbe(True)

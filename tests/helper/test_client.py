@@ -68,3 +68,16 @@ def test_client_reports_an_early_helper_exit():
             client.wait_for("ready", timeout=2)
     finally:
         client.stop()
+
+
+def test_build_helper_command_passes_the_transport():
+    command = build_helper_command(
+        "wlp-test",
+        role=P2PRole.GO,
+        frequency=2437,
+        suspend_nm=False,
+        sudo_password=None,
+        transport="dbus",
+    )
+
+    assert command[command.index("--p2p-transport") + 1] == "dbus"

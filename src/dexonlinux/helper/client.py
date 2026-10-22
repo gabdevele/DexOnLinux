@@ -46,6 +46,7 @@ class HelperClient:
         frequency: int = DEFAULT_P2P_FREQ,
         suspend_nm: bool = False,
         sudo_password: str | None = None,
+        transport: str = "auto",
         command: Sequence[str] | None = None,
     ) -> "HelperClient":
         provided_command = command is not None
@@ -55,6 +56,7 @@ class HelperClient:
                 role=role,
                 frequency=frequency,
                 suspend_nm=suspend_nm,
+                transport=transport,
                 sudo_password=sudo_password,
             )
 
@@ -138,6 +140,7 @@ def build_helper_command(
     frequency: int,
     suspend_nm: bool,
     sudo_password: str | None,
+    transport: str = "auto",
 ) -> list[str]:
     """Build the privileged helper command for this package.
 
@@ -155,6 +158,8 @@ def build_helper_command(
         role.value,
         "--p2p-freq",
         str(frequency),
+        "--p2p-transport",
+        transport,
     ]
     if suspend_nm:
         command.append("--suspend-nm")
