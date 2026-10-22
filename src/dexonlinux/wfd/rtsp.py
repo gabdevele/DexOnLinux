@@ -178,7 +178,9 @@ class WfdSink:
     # latency (1B), min-slice-size (2B), slice-enc-params (2B),
     # frame-rate-control-support (1B), max-hres (2B), max-vres (2B).
     VIDEO_FORMATS = "00 00 03 10 0001ffff 1fffffff 00001fff 00 0000 0000 10 none none"
-    AUDIO_CODECS = "AAC 00000007 00"  # LPCM mode bitmap, no AAC modes
+    # Byte-identical to the audio capability in the live-accepted M4 (codec
+    # AAC, bitmap 0x00000007, trailing 0x00); fields are not decoded here.
+    AUDIO_CODECS = "AAC 00000007 00"
 
     def __init__(
         self,
