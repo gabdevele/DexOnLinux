@@ -305,30 +305,36 @@ class DBusFastClient:
 
     async def _find_p2p_device(self, interface: str) -> str:
         paths = await self._get_property(ROOT_PATH, ROOT_IFACE, "Interfaces")
-        wanted = {f"p2p-dev-{interface}", p2p_ctrl_name(interface)}
-        if interface.startswith("p2p-dev-"):
-            wanted.add(interface)
+        # The P2P device is not always a separate netdev: with some drivers
+        # wpa_supplicant exposes P2PDevice on a non-netdev object whose Ifname
+        # is the main interface. Identify it by interface, then use Ifname only
+        # to disambiguate.
+        wanted = {interface, f"p2p-dev-{interface}", p2p_ctrl_name(interface)}
+        candidates: list[tuple[str, str]] = []
 
-        p2p_paths: list[tuple[str, str]] = []
         for path in paths:
             try:
+                node = await self._bus.introspect(BUS_NAME, path)
+            except DBusError:
+                continue
+            if not any(entry.name == P2P_IFACE for entry in node.interfaces):
+                continue
+            try:
                 ifname = await self._get_property(path, INTERFACE_IFACE, "Ifname")
-            except SupplicantError:
-                continue
-            if not isinstance(ifname, str):
-                continue
+            except DBusError:
+                ifname = ""
+            candidates.append((ifname if isinstance(ifname, str) else "", path))
+
+        for ifname, path in candidates:
             if ifname in wanted:
                 return path
-            if ifname.startswith("p2p-dev-"):
-                p2p_paths.append((ifname, path))
-
-        if len(p2p_paths) == 1:
-            return p2p_paths[0][1]
-        if not p2p_paths:
+        if len(candidates) == 1:
+            return candidates[0][1]
+        if not candidates:
             raise P2PDeviceMissing(
                 f"no P2P device for {interface}; is Wi-Fi Direct enabled?"
             )
-        names = ", ".join(name for name, _path in p2p_paths)
+        names = ", ".join(name or "<unnamed>" for name, _path in candidates)
         raise P2PDeviceMissing(f"multiple P2P devices ({names}); specify the interface")
 
     async def _probe(self, path: str) -> None:

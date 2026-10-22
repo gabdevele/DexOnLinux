@@ -22,7 +22,6 @@ from dexonlinux.p2p.dhcp import DhcpServer
 from dexonlinux.p2p.direct import DirectBackend
 from dexonlinux.p2p.link import LinkConfigurator
 from dexonlinux.p2p.supplicant import SupplicantControl, SupplicantError, find_ctrl_socket
-from dexonlinux.p2p.wfd import WfdConfigurator
 from dexonlinux.system import CommandError, SubprocessRunner
 
 LOG = logging.getLogger(__name__)
@@ -100,6 +99,31 @@ def serve(
             LOG.warning("helper cleanup failed: %s", exc)
 
 
+def build_backend(
+    interface: str,
+    control: P2PControl,
+    *,
+    role: P2PRole,
+    frequency: int,
+    suspension: NetworkManagerSuspension,
+) -> DirectBackend:
+    """Assemble the backend for one session.
+
+    Kept separate from ``main`` so the wiring is exercised without a real
+    supplicant: a signature drift here used to reach the user as a helper
+    crash before the first event.
+    """
+    return DirectBackend(
+        interface,
+        control,
+        LinkConfigurator(Pyroute2LinkOps(), SubprocessRunner()),
+        role=role,
+        frequency=frequency,
+        dhcp=DhcpServer() if role is P2PRole.GO else None,
+        before_group=suspension.suspend,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="DexOnLinux privileged P2P helper")
     parser.add_argument("--interface", required=True)
@@ -139,26 +163,25 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
+    suspension = NetworkManagerSuspension(args.suspend_nm)
     try:
         role = P2PRole(args.role)
         control, transport = open_control(args.interface, args.p2p_transport)
-        suspension = NetworkManagerSuspension(args.suspend_nm)
-        backend = DirectBackend(
+        backend = build_backend(
             args.interface,
             control,
-            WfdConfigurator(),
-            LinkConfigurator(Pyroute2LinkOps(), SubprocessRunner()),
             role=role,
             frequency=args.p2p_freq,
-            dhcp=DhcpServer() if role is P2PRole.GO else None,
-            before_group=suspension.suspend,
+            suspension=suspension,
         )
+        return serve(backend, stop, emit, args.backend, args.interface, transport)
     except (SupplicantError, CommandError) as exc:
         emit("error", {"code": exc.__class__.__name__, "message": str(exc)})
         return 1
-
-    try:
-        return serve(backend, stop, emit, args.backend, args.interface, transport)
+    except Exception as exc:  # noqa: BLE001 - never exit with a bare traceback
+        LOG.exception("unexpected helper failure")
+        emit("error", {"code": exc.__class__.__name__, "message": str(exc)})
+        return 1
     finally:
         suspension.resume()
 

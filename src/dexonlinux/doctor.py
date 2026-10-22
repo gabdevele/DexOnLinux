@@ -16,7 +16,7 @@ CTRL_DIR = Path("/run/wpa_supplicant")
 NET_DIR = Path("/sys/class/net")
 REQUIRED_COMMANDS = ("sudo", "iw", "adb", "scrcpy")
 _MAX_SUGGESTED_FREQUENCIES = 12
-_FREQUENCY = re.compile(r"^\s*\*\s*(\d+)\s*MHz")
+_FREQUENCY = re.compile(r"^\s*\*\s*(\d+(?:\.\d+)?)\s*MHz")
 
 
 @dataclass(frozen=True)
@@ -73,7 +73,7 @@ def parse_phy_frequencies(output: str) -> list[int]:
         lowered = line.lower()
         if "disabled" in lowered or "no ir" in lowered:
             continue
-        frequencies.append(int(match.group(1)))
+        frequencies.append(int(float(match.group(1))))
     return frequencies
 
 

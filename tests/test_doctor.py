@@ -341,3 +341,13 @@ def test_print_report_shows_transport_and_notes(capsys):
     output = capsys.readouterr().out
     assert "P2P transport: dbus" in output
     assert "a note" in output
+
+
+def test_parse_phy_frequencies_accepts_decimal_mhz():
+    parsed = parse_phy_frequencies(
+        "\t\t\tFrequencies:\n"
+        "\t\t\t\t* 2412.0 MHz [1] (22.0 dBm)\n"
+        "\t\t\t\t* 2437.0 MHz [6] (22.0 dBm)\n"
+        "\t\t\t\t* 5180.0 MHz [36] (22.0 dBm) (no IR)\n"
+    )
+    assert parsed == [2412, 2437]

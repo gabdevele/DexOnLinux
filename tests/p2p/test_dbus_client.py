@@ -193,14 +193,22 @@ def test_find_p2p_device_falls_back_to_the_only_p2p_device():
         client.close()
 
 
-def test_find_p2p_device_reports_a_missing_device():
+def test_find_p2p_device_reports_an_ambiguous_device():
     bus = build_bus()
+    second = "/fi/w1/wpa_supplicant1/Interfaces/9"
+    bus.nodes[second] = node(interface(IFACE, properties=["Ifname"]), full_p2p_interface())
     bus.properties[(DEVICE, IFACE, "Ifname")] = "wlan0"
+    bus.properties[(second, IFACE, "Ifname")] = "wlan1"
+    bus.properties[(ROOT, ROOT_IFACE, "Interfaces")] = [
+        "/fi/w1/wpa_supplicant1/Interfaces/0",
+        DEVICE,
+        second,
+    ]
     client = make_client(bus)
     client.connect()
     try:
-        with pytest.raises(P2PDeviceMissing):
-            client.find_p2p_device("wlan0")
+        with pytest.raises(P2PDeviceMissing, match="multiple P2P devices"):
+            client.find_p2p_device("other0")
     finally:
         client.close()
 
@@ -317,3 +325,57 @@ def test_subscribe_registers_and_dispatches_signals():
         client.close()
 
     assert received == [("ProvisionDiscoveryPBCRequest", ("/peers/aa_bb",))]
+
+
+def test_find_p2p_device_uses_the_object_exposing_p2p_device(tmp_path=None):
+    bus = build_bus()
+    # Live case: the P2P device is a non-netdev object whose Ifname is the
+    # main interface, not "p2p-dev-*".
+    bus.properties[(DEVICE, IFACE, "Ifname")] = "wlan0"
+    client = make_client(bus)
+    client.connect()
+    try:
+        assert client.find_p2p_device("wlan0") == DEVICE
+    finally:
+        client.close()
+
+
+def test_find_p2p_device_ignores_empty_interface_objects():
+    bus = build_bus()
+    bus.nodes["/fi/w1/wpa_supplicant1/Interfaces/0"] = node()
+    bus.properties[(DEVICE, IFACE, "Ifname")] = "wlan0"
+    client = make_client(bus)
+    client.connect()
+    try:
+        assert client.find_p2p_device("wlan0") == DEVICE
+    finally:
+        client.close()
+
+
+def test_find_p2p_device_prefers_the_named_device_when_several():
+    bus = build_bus()
+    second = "/fi/w1/wpa_supplicant1/Interfaces/9"
+    bus.nodes[second] = node(interface(IFACE, properties=["Ifname"]), full_p2p_interface())
+    bus.properties[(second, IFACE, "Ifname")] = "p2p-dev-other0"
+    bus.properties[(DEVICE, IFACE, "Ifname")] = "p2p-dev-wlan0"
+    client = make_client(bus)
+    client.connect()
+    try:
+        assert client.find_p2p_device("wlan0") == DEVICE
+    finally:
+        client.close()
+
+
+def test_find_p2p_device_reports_when_no_object_exposes_p2p_device():
+    bus = build_bus()
+    bus.nodes[DEVICE] = node(
+        interface(IFACE, properties=["Ifname"]),
+        interface(WPS_IFACE, properties=["ConfigMethods"]),
+    )
+    client = make_client(bus)
+    client.connect()
+    try:
+        with pytest.raises(P2PDeviceMissing, match="no P2P device"):
+            client.find_p2p_device("wlan0")
+    finally:
+        client.close()

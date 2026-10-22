@@ -6,6 +6,7 @@ from dexonlinux.helper import service
 from dexonlinux.helper.service import serve
 from dexonlinux.p2p.base import GroupInfo, P2PError, P2PRole
 from dexonlinux.p2p.control import SupplicantError
+from dexonlinux.p2p.direct import DirectBackend
 
 
 def client_group() -> GroupInfo:
@@ -172,3 +173,82 @@ def test_explicit_dbus_does_not_fall_back(monkeypatch):
 
     with pytest.raises(SupplicantError, match="no WFDIEs"):
         service.open_control("wlan0", "dbus")
+
+
+def test_main_builds_the_backend_from_the_selected_transport(monkeypatch):
+    from dexonlinux.helper import service
+
+    control = object()
+    captured = {}
+
+    def open_control(interface, transport):
+        captured["transport"] = transport
+        return control, "dbus"
+
+    def serve(backend, stop, emitter, backend_name, interface, transport):
+        captured["backend"] = backend
+        captured["interface"] = interface
+        return 0
+
+    monkeypatch.setattr(service, "open_control", open_control)
+    monkeypatch.setattr(service, "serve", serve)
+
+    assert service.main(["--interface", "wlan0", "--p2p-transport", "dbus"]) == 0
+    assert captured["transport"] == "dbus"
+    assert captured["interface"] == "wlan0"
+    assert isinstance(captured["backend"], DirectBackend)
+    assert captured["backend"]._control is control
+
+
+def test_build_backend_uses_the_supplied_control_and_role(monkeypatch):
+    from dexonlinux.helper import service
+    from dexonlinux.nm import NetworkManagerSuspension
+
+    control = object()
+    suspension = NetworkManagerSuspension(enabled=False)
+
+    backend = service.build_backend(
+        "wlan0",
+        control,
+        role=P2PRole.GO,
+        frequency=2437,
+        suspension=suspension,
+    )
+
+    assert backend._control is control
+    assert backend._frequency == 2437
+    assert backend._dhcp is not None
+    assert backend._before_group == suspension.suspend
+
+
+def test_build_backend_has_no_dhcp_for_the_client_role():
+    from dexonlinux.helper import service
+    from dexonlinux.nm import NetworkManagerSuspension
+
+    backend = service.build_backend(
+        "wlan0",
+        object(),
+        role=P2PRole.CLIENT,
+        frequency=2437,
+        suspension=NetworkManagerSuspension(enabled=False),
+    )
+
+    assert backend._dhcp is None
+
+
+def test_main_reports_an_unexpected_failure_as_an_event(monkeypatch):
+    from dexonlinux.helper import service
+
+    monkeypatch.setattr(service, "open_control", lambda interface, transport: (object(), "dbus"))
+
+    def broken_serve(*_args):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(service, "serve", broken_serve)
+    events = []
+    monkeypatch.setattr(service, "emit", lambda kind, data: events.append((kind, data)))
+
+    assert service.main(["--interface", "wlan0"]) == 1
+    assert events[-1][0] == "error"
+    assert events[-1][1]["code"] == "RuntimeError"
+    assert "boom" in events[-1][1]["message"]
