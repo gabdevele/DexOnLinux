@@ -35,9 +35,15 @@ check_os() {
 }
 
 check_python() {
+    # uv downloads the interpreter the project declares, so the system Python
+    # version only matters for the pip fallback.
+    if command_exists uv; then
+        success "uv detected; it will provide Python >= 3.11"
+        return
+    fi
     command_exists python3 || error "python3 is not installed."
     PY_VER=$(python3 -V | awk '{print $2}')
-    version_ge "$PY_VER" "3.9" || error "Python >= 3.9 is required (found $PY_VER)."
+    version_ge "$PY_VER" "3.11" || error "Python >= 3.11 is required (found $PY_VER). Install uv or a newer Python."
     success "Python $PY_VER detected"
 }
 
@@ -47,22 +53,22 @@ install_system_deps() {
         apt)
             sudo apt-get update -qq
             sudo apt-get install -y \
-                python3 python3-venv python3-pip git wget \
-                iw iproute2 network-manager wpasupplicant adb
+                python3 python3-venv python3-pip git wget dbus \
+                iw network-manager wpasupplicant adb
             if ! sudo apt-get install -y scrcpy; then
                 warn "The distribution does not provide scrcpy; install a recent release manually."
             fi
             ;;
         pacman)
             sudo pacman -Sy --needed --noconfirm \
-                python python-pip git wget iw iproute2 networkmanager wpa_supplicant android-tools
+                python python-pip git wget dbus iw networkmanager wpa_supplicant android-tools
             if ! sudo pacman -S --needed --noconfirm scrcpy; then
                 warn "The distribution does not provide scrcpy; install a recent release manually."
             fi
             ;;
         dnf)
             sudo dnf install -y \
-                python3 python3-pip git wget iw iproute NetworkManager wpa_supplicant android-tools
+                python3 python3-pip git wget dbus iw NetworkManager wpa_supplicant android-tools
             if ! sudo dnf install -y scrcpy; then
                 warn "The distribution does not provide scrcpy; install a recent release manually."
             fi

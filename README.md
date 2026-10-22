@@ -30,14 +30,15 @@ No reboot, no private supplicant, no Miraclecast.
 
 ## Requirements
 
-- Python 3.10 or newer
+- Python 3.11 or newer
 - a Wi-Fi adapter and driver with P2P GO support
   (the P2P group runs on 2437 MHz by default; `--doctor` validates the
   frequency against the adapter's channel list and `--p2p-freq <MHz>` overrides
   it when needed; the station can stay on any band)
-- NetworkManager + wpa_supplicant (tested on Ubuntu 24.04, NetworkManager 1.46,
-  Intel AX201; standalone wpa_supplicant is also supported)
-- `iw`, `ip`, `adb`, `scrcpy`, `sudo`
+- NetworkManager + wpa_supplicant built with D-Bus, P2P and Wi-Fi Display
+  support (tested on Ubuntu 24.04, NetworkManager 1.46, Intel AX201; standalone
+  wpa_supplicant is also supported)
+- `iw`, `adb`, `scrcpy`, `sudo`
 - Debian/Ubuntu, Arch, or Fedora
 
 NetworkManager + iwd and ConnMan are not supported in v1. The doctor reports

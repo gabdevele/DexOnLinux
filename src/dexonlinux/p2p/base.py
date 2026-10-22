@@ -1,11 +1,11 @@
 import ipaddress
 import threading
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Protocol
 
 
-class P2PRole(str, Enum):
+class P2PRole(StrEnum):
     """Role this side plays in the P2P group.
 
     The WFA ``go_intent`` value forces the negotiated outcome: 15 means
