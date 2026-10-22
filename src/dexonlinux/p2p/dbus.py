@@ -116,6 +116,7 @@ class DBusFastClient:
         self._error: BaseException | None = None
         self._signal_path: str | None = None
         self._signal_callback: Callable[[str, tuple[object, ...]], None] | None = None
+        self._nodes: dict[str, object] = {}
 
     def connect(self) -> None:
         if self._bus is not None:
@@ -134,6 +135,7 @@ class DBusFastClient:
     def close(self) -> None:
         self._signal_callback = None
         self._signal_path = None
+        self._nodes.clear()
         bus = self._bus
         self._bus = None
         loop = self._loop
@@ -144,8 +146,8 @@ class DBusFastClient:
             with contextlib.suppress(RuntimeError):
                 loop.call_soon_threadsafe(bus.disconnect)
         try:
-            shutdown = asyncio.run_coroutine_threadsafe(self._cancel_pending(), loop)
-            shutdown.result(timeout=1.0)
+            shutdown = asyncio.run_coroutine_threadsafe(self._shutdown(), loop)
+            shutdown.result(timeout=2.0)
         except (RuntimeError, concurrent.futures.TimeoutError):
             pass
         with contextlib.suppress(RuntimeError):
@@ -210,16 +212,31 @@ class DBusFastClient:
     async def _open(self) -> None:
         bus = self._bus_factory()
         await bus.connect()
+        # dbus-fast stores a connection-loss future and only marks its
+        # exception as retrieved when message handlers exist. We install no
+        # exported handlers, so without this asyncio logs "Future exception
+        # was never retrieved" (EOFError) on every shutdown.
+        disconnect_future = getattr(bus, "_disconnect_future", None)
+        if disconnect_future is not None:
+            disconnect_future.add_done_callback(_consume_exception)
         bus.add_message_handler(self._on_message)
         self._bus = bus
 
-    async def _cancel_pending(self) -> None:
+    async def _shutdown(self) -> None:
+        """Cancel in-flight calls and collect their exceptions.
+
+        dbus-fast's message reader fails with ``EOFError`` when the socket
+        closes. Nothing awaits that task during a normal shutdown, so asyncio
+        would log "Future exception was never retrieved"; gathering it here
+        keeps the helper log readable.
+        """
         current = asyncio.current_task()
         pending = [task for task in asyncio.all_tasks() if task is not current]
         for task in pending:
             task.cancel()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
+        await asyncio.sleep(0)
 
     def _stop_loop(self) -> None:
         loop = self._loop
@@ -281,9 +298,16 @@ class DBusFastClient:
         return False
 
     async def _interface(self, path: str, name: str):
-        node = await self._bus.introspect(BUS_NAME, path)
+        node = await self._node(path)
         proxy = self._bus.get_proxy_object(BUS_NAME, path, node)
         return proxy.get_interface(name)
+
+    async def _node(self, path: str):
+        node = self._nodes.get(path)
+        if node is None:
+            node = await self._bus.introspect(BUS_NAME, path)
+            self._nodes[path] = node
+        return node
 
     async def _get_property(self, path: str, interface: str, name: str):
         props = await self._interface(path, PROPERTIES_IFACE)
@@ -297,11 +321,18 @@ class DBusFastClient:
         await props.call_set(interface, name, Variant(signature, value))
 
     async def _call_method(self, path: str, interface: str, method: str, *args: object):
-        target = await self._interface(path, interface)
+        node = await self._node(path)
+        target = self._bus.get_proxy_object(BUS_NAME, path, node).get_interface(interface)
         handler = getattr(target, f"call_{_snake(method)}", None)
         if handler is None:
             raise SupplicantError(f"{interface}.{method} is not available")
-        return await handler(*args)
+        _check_arguments(node, interface, method, args)
+        try:
+            return await handler(*args)
+        except (TypeError, ValueError) as exc:
+            # dbus-fast reports a badly typed argument only while marshalling
+            # the message, with no mention of the method involved.
+            raise SupplicantError(f"{interface}.{method} arguments are invalid: {exc}") from exc
 
     async def _find_p2p_device(self, interface: str) -> str:
         paths = await self._get_property(ROOT_PATH, ROOT_IFACE, "Interfaces")
@@ -447,10 +478,7 @@ class WpaSupplicantDBus:
                 P2P_IFACE,
                 "P2PDeviceConfig",
                 "a{sv}",
-                {
-                    "GOIntent": Variant("u", go_intent),
-                    "DeviceName": Variant("s", device_name),
-                },
+                _device_config_args(go_intent, device_name),
             )
             self._client.set_property(device, WPS_IFACE, "ConfigMethods", "s", "0x80")
         except SupplicantError as exc:
@@ -480,10 +508,7 @@ class WpaSupplicantDBus:
                 P2P_IFACE,
                 "P2PDeviceConfig",
                 "a{sv}",
-                {
-                    "GOIntent": Variant("u", state.go_intent),
-                    "DeviceName": Variant("s", state.device_name),
-                },
+                _device_config_args(state.go_intent, state.device_name),
             ),
             "restore P2PDeviceConfig",
         )
@@ -500,7 +525,7 @@ class WpaSupplicantDBus:
             self._require_device(),
             P2P_IFACE,
             "ExtendedListen",
-            {"period": period_ms, "interval": interval_ms},
+            _extended_listen_args(period_ms, interval_ms),
         )
 
     def stop_extended_listen(self) -> None:
@@ -515,12 +540,7 @@ class WpaSupplicantDBus:
             self._require_device(),
             P2P_IFACE,
             "Connect",
-            {
-                "peer": peer.path,
-                "wps_method": "pbc",
-                "frequency": frequency,
-                "go_intent": go_intent,
-            },
+            _connect_args(peer.path, frequency, go_intent),
         )
 
     def disconnect(self) -> None:
@@ -616,11 +636,15 @@ class WpaSupplicantDBus:
             ifname = self._client.get_property(interface, INTERFACE_IFACE, "Ifname")
             if not isinstance(ifname, str) or not ifname:
                 raise ValueError("GroupStarted interface has no name")
-            frequency = (
-                self._client.get_property(group_object, GROUP_IFACE, "Frequency")
-                if isinstance(group_object, str)
-                else None
-            )
+            frequency: int | None = None
+            if isinstance(group_object, str):
+                try:
+                    value = self._client.get_property(group_object, GROUP_IFACE, "Frequency")
+                    frequency = value if isinstance(value, int) else None
+                except SupplicantError as exc:
+                    # Frequency is informational; a missing read must not
+                    # abort a group that has already started.
+                    LOG.debug("could not read the group frequency: %s", exc)
 
             if role is P2PRole.CLIENT:
                 local_ip = _ipv4(props.get("IpAddr"))
@@ -631,7 +655,13 @@ class WpaSupplicantDBus:
                 local_ip = None
                 peer_ip = None
                 prefix = 24
-                go_dev_addr = _mac(self._client.get_property(self._require_device(), P2P_IFACE, "DeviceAddress"))
+                try:
+                    go_dev_addr = _mac(
+                        self._client.get_property(self._require_device(), P2P_IFACE, "DeviceAddress")
+                    )
+                except SupplicantError as exc:
+                    LOG.debug("could not read the local P2P device address: %s", exc)
+                    go_dev_addr = ""
 
             group = GroupInfo(
                 ifname=ifname,
@@ -639,7 +669,7 @@ class WpaSupplicantDBus:
                 local_ip=local_ip,
                 peer_ip=peer_ip,
                 local_prefix=prefix,
-                frequency=int(frequency) if isinstance(frequency, int) else None,
+                frequency=frequency,
                 go_dev_addr=go_dev_addr,
             )
         except (SupplicantError, ValueError, TypeError) as exc:
@@ -688,8 +718,16 @@ def _mac_from_path(path: object) -> str:
     if not isinstance(path, str):
         return ""
     segment = path.rsplit("/", 1)[-1]
+    # wpa_supplicant builds peer paths with COMPACT_MACSTR: six lowercase hex
+    # bytes and no separators (e.g. .../Peers/aabbccddeeff). Accept the
+    # colon/underscore forms too, because older tests and diagnostics use them.
+    if len(segment) == 12 and all(char in "0123456789abcdefABCDEF" for char in segment):
+        compact = segment.lower()
+        return ":".join(compact[index : index + 2] for index in range(0, 12, 2))
+    if len(segment) == 17 and segment.count(":") == 5:
+        return segment.lower()
     if len(segment) == 17 and segment.count("_") == 5:
-        return segment.replace("_", ":")
+        return segment.replace("_", ":").lower()
     return ""
 
 
@@ -739,3 +777,75 @@ def probe_dbus(interface: str) -> DBusProbe:
     finally:
         control.close()
     return DBusProbe(True)
+
+
+def _device_config_args(go_intent: int, device_name: str) -> dict[str, Variant]:
+    """Build the ``P2PDeviceConfig`` dictionary.
+
+    Every entry of an ``a{sv}`` argument must be a ``Variant``; dbus-fast
+    raises a bare ``TypeError`` at marshalling time otherwise, which surfaces
+    only once the request reaches a live supplicant.
+    """
+    return {
+        "GOIntent": Variant("u", go_intent),
+        "DeviceName": Variant("s", device_name),
+    }
+
+
+def _extended_listen_args(period_ms: int, interval_ms: int) -> dict[str, Variant]:
+    """Build the ``ExtendedListen`` argument dictionary."""
+    return {
+        "period": Variant("i", period_ms),
+        "interval": Variant("i", interval_ms),
+    }
+
+
+def _connect_args(peer_path: str, frequency: int, go_intent: int) -> dict[str, Variant]:
+    """Build the ``Connect`` argument dictionary for PBC group formation."""
+    return {
+        "peer": Variant("o", peer_path),
+        "wps_method": Variant("s", "pbc"),
+        "frequency": Variant("i", frequency),
+        "go_intent": Variant("i", go_intent),
+    }
+
+
+def _consume_exception(future: asyncio.Future) -> None:
+    """Mark a finished future's exception as retrieved.
+
+    Used only for dbus-fast's internal connection-loss future; see ``_open``.
+    """
+    if not future.cancelled():
+        future.exception()
+
+
+def _check_arguments(node: object, interface: str, method: str, args: tuple[object, ...]) -> None:
+    """Marshal the request before sending it.
+
+    dbus-fast marshals lazily, inside the bus write path. A wrong value type
+    therefore fails *after* the call future exists, and that orphaned future
+    later logs "Future exception was never retrieved". Validating here turns
+    the same mistake into a clear ``SupplicantError`` naming the method.
+    """
+    entry = next((item for item in node.interfaces if item.name == interface), None)
+    if entry is None:
+        raise SupplicantError(f"{interface} is not available on {getattr(node, 'name', 'this object')}")
+    descriptor = next((item for item in entry.methods if item.name == method), None)
+    if descriptor is None:
+        raise SupplicantError(f"{interface}.{method} is not available")
+    signature = "".join(arg.signature for arg in descriptor.in_args)
+    message = Message(
+        message_type=MessageType.METHOD_CALL,
+        destination=BUS_NAME,
+        path="/fi/w1/wpa_supplicant1",
+        interface=interface,
+        member=method,
+        signature=signature,
+        body=list(args),
+    )
+    try:
+        message._marshall(False)
+    except (TypeError, ValueError) as exc:
+        raise SupplicantError(
+            f"{interface}.{method} arguments are invalid ({signature}): {exc}"
+        ) from exc

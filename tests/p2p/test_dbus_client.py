@@ -130,7 +130,7 @@ def interface(name, methods=(), properties=(), signals=()):
 def full_p2p_interface():
     return interface(
         P2P_IFACE,
-        methods=["Connect", "ExtendedListen", "Disconnect"],
+        methods=["Connect", "ExtendedListen", "Disconnect", "Slow"],
         properties=["P2PDeviceConfig"],
         signals=[
             "GroupStarted",
@@ -308,7 +308,7 @@ def test_call_times_out_as_supplicant_error():
     client.connect()
     try:
         with pytest.raises(SupplicantError, match="timed out"):
-            client.call(ROOT, P2P_IFACE, "Slow", timeout=0.01)
+            client.call(DEVICE, P2P_IFACE, "Slow", timeout=0.01)
     finally:
         client.close()
 

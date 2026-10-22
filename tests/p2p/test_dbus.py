@@ -1,19 +1,28 @@
 import threading
 
 import pytest
+from dbus_fast import Message, MessageType, Variant
+from dbus_fast import introspection as intr
 
 from dexonlinux.p2p.base import P2PError, P2PRole, Peer
 from dexonlinux.p2p.control import SupplicantError
 from dexonlinux.p2p.dbus import (
+    BUS_NAME,
     GROUP_IFACE,
     INTERFACE_IFACE,
     P2P_IFACE,
+    PROPERTIES_IFACE,
     ROOT_IFACE,
     ROOT_PATH,
     WPS_IFACE,
     DBusWfdState,
     WpaSupplicantDBus,
+    _check_arguments,
+    _connect_args,
+    _device_config_args,
+    _extended_listen_args,
     _ipv4,
+    _mac_from_path,
     _prefix,
 )
 from dexonlinux.p2p.direct import DirectBackend
@@ -97,6 +106,11 @@ def test_restore_wfd_clears_ies_when_previous_empty():
     assert client.properties[(DEVICE, WPS_IFACE, "ConfigMethods")] == "0x188"
 
 
+def _value(payload, key):
+    item = payload[key]
+    return item.value if isinstance(item, Variant) else item
+
+
 def test_start_and_stop_extended_listen():
     control, client = make_control()
     control.open()
@@ -104,10 +118,9 @@ def test_start_and_stop_extended_listen():
     control.start_extended_listen(1000, 1000)
     control.stop_extended_listen()
 
-    assert client.calls == [
-        (DEVICE, P2P_IFACE, "ExtendedListen", ({"period": 1000, "interval": 1000},)),
-        (DEVICE, P2P_IFACE, "ExtendedListen", ({},)),
-    ]
+    first = client.calls[0][3][0]
+    assert (_value(first, "period"), _value(first, "interval")) == (1000, 1000)
+    assert client.calls[1] == (DEVICE, P2P_IFACE, "ExtendedListen", ({},))
 
 
 def test_connect_uses_peer_path_and_pbc():
@@ -117,21 +130,12 @@ def test_connect_uses_peer_path_and_pbc():
 
     control.connect(peer, frequency=2437, go_intent=15)
 
-    assert client.calls == [
-        (
-            DEVICE,
-            P2P_IFACE,
-            "Connect",
-            (
-                {
-                    "peer": peer.path,
-                    "wps_method": "pbc",
-                    "frequency": 2437,
-                    "go_intent": 15,
-                },
-            ),
-        )
-    ]
+    payload = client.calls[0][3][0]
+    assert client.calls[0][:3] == (DEVICE, P2P_IFACE, "Connect")
+    assert _value(payload, "peer") == peer.path
+    assert _value(payload, "wps_method") == "pbc"
+    assert _value(payload, "frequency") == 2437
+    assert _value(payload, "go_intent") == 15
 
 
 def test_connect_without_peer_path_fails_clearly():
@@ -419,8 +423,8 @@ def test_dbus_backend_end_to_end():
 
     connects = [call for call in client.calls if call[2] == "Connect"]
     assert len(connects) == 1
-    assert connects[0][3][0]["peer"] == peer_path
-    assert connects[0][3][0]["wps_method"] == "pbc"
+    assert _value(connects[0][3][0], "peer") == peer_path
+    assert _value(connects[0][3][0], "wps_method") == "pbc"
 
     client.emit(
         "GroupFinished",
@@ -435,3 +439,122 @@ def test_dbus_backend_end_to_end():
     # The phone already removed the group, so close() must not try again.
     assert link.removed == []
     assert client.closed is True
+
+
+# Signatures taken from the live introspection of wpa_supplicant 2.10:
+#   ExtendedListen(a{sv}), Connect(a{sv}), P2PDeviceConfig a{sv}, WFDIEs ay.
+# Marshalling is what dbus-fast does right before sending, so a wrong value
+# type fails here exactly as it would against the real bus.
+def _marshals(signature, body):
+    message = Message(
+        message_type=MessageType.METHOD_CALL,
+        destination=BUS_NAME,
+        path=DEVICE,
+        interface=P2P_IFACE,
+        member="Probe",
+        signature=signature,
+        body=body,
+    )
+    message._marshall(False)
+
+
+def test_extended_listen_payload_marshals_as_a_sv():
+    _marshals("a{sv}", [_extended_listen_args(1000, 1000)])
+
+
+def test_connect_payload_marshals_as_a_sv():
+    _marshals("a{sv}", [_connect_args("/peers/aa_bb_cc_dd_ee_ff", 2437, 15)])
+
+
+def test_device_config_payload_marshals_as_a_sv():
+    _marshals("a{sv}", [_device_config_args(15, "DexOnLinux")])
+
+
+def test_wfd_ies_marshals_as_ay():
+    _marshals("ay", [WFD_IES])
+
+
+def test_plain_values_do_not_marshal_as_a_sv():
+    # Guards the regression: this is what the live supplicant rejected.
+    with pytest.raises(TypeError, match="Cannot convert int"):
+        _marshals("a{sv}", [{"period": 1000}])
+
+
+def test_check_arguments_names_the_bad_method():
+    node = intr.Node(
+        interfaces=[
+            intr.Interface(
+                name=P2P_IFACE,
+                methods=[
+                    intr.Method("ExtendedListen", in_args=[intr.Arg("a{sv}")]),
+                ],
+            )
+        ]
+    )
+
+    with pytest.raises(SupplicantError, match=r"ExtendedListen arguments are invalid \(a\{sv\}\)"):
+        _check_arguments(node, P2P_IFACE, "ExtendedListen", ({"period": 1000},))
+
+
+def _marshals_set(interface, prop, variant):
+    message = Message(
+        message_type=MessageType.METHOD_CALL,
+        destination=BUS_NAME,
+        path=DEVICE,
+        interface=PROPERTIES_IFACE,
+        member="Set",
+        signature="ssv",
+        body=[interface, prop, variant],
+    )
+    message._marshall(False)
+
+
+def test_wfdie_set_payload_marshals_as_ssv():
+    _marshals_set(ROOT_IFACE, "WFDIEs", Variant("ay", WFD_IES))
+
+
+def test_device_config_set_payload_marshals_as_ssv():
+    _marshals_set(P2P_IFACE, "P2PDeviceConfig", Variant("a{sv}", _device_config_args(15, "DexOnLinux")))
+
+
+def test_config_methods_set_payload_marshals_as_ssv():
+    _marshals_set(WPS_IFACE, "ConfigMethods", Variant("s", "0x80"))
+
+
+def test_peer_path_uses_the_compact_mac_format():
+    # wpa_supplicant's COMPACT_MACSTR: six hex bytes, no separators.
+    client = FakeDBusClient()
+    control = started_control(client)
+
+    client.emit("ProvisionDiscoveryPBCRequest", (f"{DEVICE}/Peers/aabbccddeeff",))
+    events = control.pump(0)
+
+    assert [event.kind for event in events] == [EventKind.PBC_REQUEST]
+    assert events[0].peer is not None
+    assert events[0].peer.mac == "aa:bb:cc:dd:ee:ff"
+    assert events[0].peer.path == f"{DEVICE}/Peers/aabbccddeeff"
+
+
+def test_mac_from_path_accepts_all_three_formats():
+    assert _mac_from_path("/x/Peers/aabbccddeeff") == "aa:bb:cc:dd:ee:ff"
+    assert _mac_from_path("/x/Peers/aa_bb_cc_dd_ee_ff") == "aa:bb:cc:dd:ee:ff"
+    assert _mac_from_path("/x/Peers/aa:bb:cc:dd:ee:ff") == "aa:bb:cc:dd:ee:ff"
+    assert _mac_from_path("/x/Peers/not-a-mac") == ""
+
+
+def test_group_started_survives_missing_optional_properties():
+    client = FakeDBusClient()
+    control = started_control(client)
+    client.properties[(GROUP_DEVICE, INTERFACE_IFACE, "Ifname")] = "p2p-wlan0-0"
+    # No Frequency on the group and no DeviceAddress on the P2P device.
+
+    client.emit(
+        "GroupStarted",
+        ({"interface_object": GROUP_DEVICE, "role": "GO", "group_object": GROUP_OBJECT},),
+    )
+    events = control.pump(0)
+
+    assert [event.kind for event in events] == [EventKind.GROUP_STARTED]
+    assert events[0].group is not None
+    assert events[0].group.frequency is None
+    assert events[0].group.go_dev_addr == ""
