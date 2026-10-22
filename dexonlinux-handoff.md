@@ -37,7 +37,7 @@
 ## 1. Executive Summary & Context
 **DexOnLinux** is an open-source tool designed to bridge Samsung DeX to Linux desktop environments.
 - **Author:** gabdevele
-- **Current Version:** v1.0.2 (Alpha / Functional MVP)
+- **Current Version:** v1.1.0 (Alpha / Functional MVP)
 - **Stack:** Python (>= 3.9), uv, `miraclecast`, `scrcpy`, `adb`, `NetworkManager` / `wpa_supplicant`.
 - **Core Concept:** A pragmatic "hacker workaround":
   1. Uses `miracle-wifid` and `miracle-sinkctl` to emulate a Miracast Wi-Fi Direct sink, tricking Samsung One UI into initiating a native wireless DeX session.
