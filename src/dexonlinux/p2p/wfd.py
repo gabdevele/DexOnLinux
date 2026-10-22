@@ -1,7 +1,5 @@
 """Wi-Fi Display advertisement and supplicant state restoration."""
 
-from __future__ import annotations
-
 import logging
 import struct
 from dataclasses import dataclass

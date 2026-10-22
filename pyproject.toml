@@ -3,7 +3,7 @@ name = "dexonlinux"
 dynamic = ["version"]
 description = "Stream Samsung DeX to a Linux desktop over Wi-Fi Direct."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 keywords = ["samsung", "dex", "linux", "scrcpy", "wifi-direct", "wfd", "miracast"]
 authors = [
     { name = "gabdevele", email = "me@gabdevele.dev" }
@@ -59,7 +59,7 @@ version = { attr = "dexonlinux.__version__" }
 
 [tool.ruff]
 line-length = 120
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RET"]

@@ -1,7 +1,5 @@
 """User-side client for the privileged P2P helper."""
 
-from __future__ import annotations
-
 import contextlib
 import json
 import logging
@@ -51,7 +49,7 @@ class HelperClient:
         suspend_nm: bool = False,
         sudo_password: str | None = None,
         command: Sequence[str] | None = None,
-    ) -> HelperClient:
+    ) -> "HelperClient":
         provided_command = command is not None
         if command is None:
             command = build_helper_command(

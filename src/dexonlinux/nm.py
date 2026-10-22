@@ -11,8 +11,6 @@ Observed with NetworkManager 1.46 (live evidence in
 resumes NetworkManager if the helper is killed before it can clean up.
 """
 
-from __future__ import annotations
-
 import atexit
 import logging
 import os
@@ -117,7 +115,7 @@ class NetworkManagerSuspension:
             self._stop_watchdog()
             LOG.info("resumed NetworkManager (pid %d)", pid)
 
-    def __enter__(self) -> NetworkManagerSuspension:
+    def __enter__(self) -> "NetworkManagerSuspension":
         self.suspend()
         return self
 

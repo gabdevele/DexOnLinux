@@ -1,7 +1,5 @@
 """scrcpy process lifecycle and display selection."""
 
-from __future__ import annotations
-
 import logging
 import os
 import subprocess

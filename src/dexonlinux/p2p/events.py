@@ -1,7 +1,5 @@
 """Parse wpa_supplicant P2P event lines into a small typed model."""
 
-from __future__ import annotations
-
 import ipaddress
 import re
 from dataclasses import dataclass

@@ -1,7 +1,5 @@
 """Core P2P types shared by the backends and the helper."""
 
-from __future__ import annotations
-
 import ipaddress
 import threading
 from dataclasses import dataclass

@@ -6,8 +6,6 @@ and another process; this server only handles the DISCOVER/REQUEST exchange
 for the single P2P peer.
 """
 
-from __future__ import annotations
-
 import logging
 import socket
 import struct
@@ -138,7 +136,7 @@ class DhcpServer:
         while not self._stop.is_set():
             try:
                 packet, _ = sock.recvfrom(2048)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 break

@@ -4,8 +4,6 @@ Keep fakes at public seams: tests should not depend on private implementation
 details.
 """
 
-from __future__ import annotations
-
 from collections.abc import Mapping, Sequence
 
 from dexonlinux.system import CommandResult

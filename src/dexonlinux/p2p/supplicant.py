@@ -5,8 +5,6 @@ the dedicated P2P-device socket. It never stops or reconfigures the supplicant
 service.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import queue
@@ -142,7 +140,7 @@ class SupplicantControl:
         self._sock.settimeout(max(0.01, timeout))
         try:
             return self._sock.recv(MAX_REPLY_BYTES)
-        except socket.timeout:
+        except TimeoutError:
             return None
         except OSError as exc:
             raise SupplicantError(f"control socket error: {exc}") from exc

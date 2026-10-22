@@ -1,7 +1,5 @@
 """Direct wpa_supplicant P2P backend."""
 
-from __future__ import annotations
-
 import logging
 import threading
 import time

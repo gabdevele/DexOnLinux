@@ -1,7 +1,5 @@
 """Small data types for ADB and scrcpy discovery."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 

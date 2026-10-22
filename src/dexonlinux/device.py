@@ -1,7 +1,5 @@
 """ADB device and scrcpy display discovery."""
 
-from __future__ import annotations
-
 import re
 
 from dexonlinux.models import AdbDevice, ScrcpyDisplay

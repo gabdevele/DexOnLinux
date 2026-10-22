@@ -4,13 +4,11 @@ Implements just enough of the AOSP source state machine to drive
 ``dexonlinux.wfd.rtsp.WfdSink`` through M1-M7, keepalives and teardown.
 """
 
-from __future__ import annotations
-
 import contextlib
 import socket
 import threading
 import time
-from typing import Callable
+from collections.abc import Callable
 
 from dexonlinux.wfd.rtsp import Message, RtspConnection, build_request, build_response
 

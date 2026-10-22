@@ -6,15 +6,13 @@ the RTSP client. Only the control path matters here: RTP packets are drained
 and dropped.
 """
 
-from __future__ import annotations
-
 import contextlib
 import logging
 import socket
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 LOG = logging.getLogger(__name__)
 
@@ -146,7 +144,7 @@ class RtspConnection:
             self._sock.settimeout(max(timeout, 0.01))
             try:
                 chunk = self._sock.recv(RECV_CHUNK)
-            except socket.timeout:
+            except TimeoutError:
                 return None
             if not chunk:
                 raise ConnectionError("RTSP connection closed by peer")
@@ -251,7 +249,7 @@ class WfdSink:
         while not self._stop.is_set():
             try:
                 sock.recvfrom(RTP_BUFFER)
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except OSError:
                 break

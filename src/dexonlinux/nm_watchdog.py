@@ -5,8 +5,6 @@ This module runs in a separate session so that the user-side helper cleanup
 NetworkManager.
 """
 
-from __future__ import annotations
-
 import contextlib
 import os
 import signal

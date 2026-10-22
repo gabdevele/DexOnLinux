@@ -1,7 +1,5 @@
 """Terminal interaction: colors, prompts, banners and packaged assets."""
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable, Sequence
 from importlib import resources

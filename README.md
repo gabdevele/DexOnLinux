@@ -30,7 +30,7 @@ No reboot, no private supplicant, no Miraclecast.
 
 ## Requirements
 
-- Python 3.9 or newer
+- Python 3.10 or newer
 - a Wi-Fi adapter and driver with P2P GO support
   (the P2P group runs on 2437 MHz by default; `--doctor` validates the
   frequency against the adapter's channel list and `--p2p-freq <MHz>` overrides

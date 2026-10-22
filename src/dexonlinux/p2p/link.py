@@ -6,8 +6,6 @@ bounded watcher raises it during GO negotiation; the address is added only
 after GROUP-STARTED.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import threading

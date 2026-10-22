@@ -1,15 +1,13 @@
 """Privileged helper: owns the supplicant ctrl socket and the P2P group."""
 
-from __future__ import annotations
-
 import argparse
 import json
 import logging
 import signal
 import sys
 import threading
+from collections.abc import Callable
 from dataclasses import asdict
-from typing import Callable
 
 from dexonlinux.nm import NetworkManagerSuspension
 from dexonlinux.p2p.base import DEFAULT_P2P_FREQ, GroupInfo, P2PError, P2PRole

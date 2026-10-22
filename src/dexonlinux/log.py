@@ -4,8 +4,6 @@ The "dexonlinux" logger is configured once from the CLI arguments; library
 modules only call ``logging.getLogger(__name__)`` and never add handlers.
 """
 
-from __future__ import annotations
-
 import logging
 from pathlib import Path
 
