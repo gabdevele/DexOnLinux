@@ -1,7 +1,7 @@
 import asyncio
 
 import pytest
-from dbus_fast import Message, MessageType, Variant
+from dbus_fast import Variant
 from dbus_fast import introspection as intr
 from dbus_fast.constants import PropertyAccess
 from dbus_fast.errors import DBusError
@@ -12,6 +12,7 @@ from dexonlinux.p2p.dbus import (
     P2PDeviceMissing,
     SupplicantError,
     WfdUnsupported,
+    _snake,
 )
 
 BUS_NAME = "fi.w1.wpa_supplicant1"
@@ -29,6 +30,7 @@ class FakeInterface:
         self.name = name
         self.bus = bus
         self.calls = []
+        self.signal_handlers = {}
 
     async def call_get(self, interface, prop):
         self.calls.append(("get", interface, prop))
@@ -47,6 +49,13 @@ class FakeInterface:
         self.bus.properties[(self.path, interface, prop)] = variant.value
 
     def __getattr__(self, name):
+        if name.startswith("on_"):
+            key = name[3:]
+
+            def register(fn):
+                self.signal_handlers[key] = fn
+
+            return register
         if not name.startswith("call_"):
             raise AttributeError(name)
         method = name[5:]
@@ -65,6 +74,8 @@ class FakeProxy:
         self.path = path
 
     def get_interface(self, name):
+        if name == P2P_IFACE:
+            self.bus.signal_path = self.path
         return self.bus.interface(self.path, name)
 
 
@@ -76,6 +87,7 @@ class FakeBus:
         self.handlers = []
         self.connected = False
         self.disconnected = False
+        self.signal_path = DEVICE
         self._interfaces = {}
 
     async def connect(self):
@@ -103,15 +115,12 @@ class FakeBus:
         return self._interfaces[key]
 
     def emit(self, member, body=()):
-        message = Message(
-            message_type=MessageType.SIGNAL,
-            interface=P2P_IFACE,
-            member=member,
-            path="/fi/w1/wpa_supplicant1/Interfaces/1",
-            body=list(body),
-        )
-        for handler in self.handlers:
-            handler(message)
+        from dexonlinux.p2p.dbus import _snake
+
+        target = self.interface(self.signal_path, P2P_IFACE)
+        handler = target.signal_handlers.get(_snake(member))
+        if handler is not None:
+            handler(*body)
 
 
 def node(*interfaces):
@@ -379,3 +388,24 @@ def test_find_p2p_device_reports_when_no_object_exposes_p2p_device():
             client.find_p2p_device("wlan0")
     finally:
         client.close()
+
+
+def test_snake_matches_the_generated_dbus_fast_names():
+    assert _snake("ProvisionDiscoveryPBCRequest") == "provision_discovery_pbc_request"
+    assert _snake("GONegotiationRequest") == "go_negotiation_request"
+    assert _snake("ExtendedListen") == "extended_listen"
+
+
+def test_subscribe_registers_the_generated_signal_handlers():
+    bus = build_bus()
+    client = make_client(bus)
+    client.connect()
+    try:
+        client.subscribe(DEVICE, lambda *_args: None)
+    finally:
+        client.close()
+
+    handlers = bus.interface(DEVICE, P2P_IFACE).signal_handlers
+    assert "provision_discovery_pbc_request" in handlers
+    assert "group_started" in handlers
+    assert "go_negotiation_success" in handlers

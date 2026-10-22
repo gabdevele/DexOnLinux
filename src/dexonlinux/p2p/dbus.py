@@ -16,6 +16,7 @@ import contextlib
 import ipaddress
 import logging
 import queue
+import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -46,6 +47,18 @@ P2P_SIGNALS = (
     "GroupFinished",
     "GONegotiationSuccess",
     "ProvisionDiscoveryPBCRequest",
+)
+P2P_SIGNAL_HANDLERS = (
+    "ProvisionDiscoveryPBCRequest",
+    "ProvisionDiscoveryRequestDisplayPin",
+    "ProvisionDiscoveryRequestEnterPin",
+    "GONegotiationRequest",
+    "GONegotiationSuccess",
+    "GONegotiationFailure",
+    "GroupStarted",
+    "GroupFinished",
+    "InvitationReceived",
+    "DeviceFoundProperties",
 )
 
 
@@ -114,8 +127,6 @@ class DBusFastClient:
         self._bus: MessageBus | None = None
         self._ready = threading.Event()
         self._error: BaseException | None = None
-        self._signal_path: str | None = None
-        self._signal_callback: Callable[[str, tuple[object, ...]], None] | None = None
         self._nodes: dict[str, object] = {}
 
     def connect(self) -> None:
@@ -133,8 +144,6 @@ class DBusFastClient:
             raise DBusUnavailable(f"cannot connect to the system bus: {error}") from error
 
     def close(self) -> None:
-        self._signal_callback = None
-        self._signal_path = None
         self._nodes.clear()
         bus = self._bus
         self._bus = None
@@ -166,10 +175,7 @@ class DBusFastClient:
         self._call(self._probe(path))
 
     def subscribe(self, path: str, callback: Callable[[str, tuple[object, ...]], None]) -> None:
-        # The message handler is installed once in _open(); swapping these two
-        # attributes is all a subscription needs and stays thread-safe.
-        self._signal_path = path
-        self._signal_callback = callback
+        self._call(self._subscribe(path, callback))
 
     def get_property(
         self, path: str, interface: str, name: str, *, timeout: float | None = None
@@ -219,7 +225,6 @@ class DBusFastClient:
         disconnect_future = getattr(bus, "_disconnect_future", None)
         if disconnect_future is not None:
             disconnect_future.add_done_callback(_consume_exception)
-        bus.add_message_handler(self._on_message)
         self._bus = bus
 
     async def _shutdown(self) -> None:
@@ -281,22 +286,6 @@ class DBusFastClient:
 
     # -- D-Bus operations ---------------------------------------------------
 
-    def _on_message(self, message: Message) -> bool:
-        if message.message_type is not MessageType.SIGNAL:
-            return False
-        if message.interface != P2P_IFACE:
-            return False
-        if self._signal_path is None or message.path != self._signal_path:
-            return False
-        callback = self._signal_callback
-        if callback is None:
-            return False
-        try:
-            callback(message.member, tuple(message.body))
-        except Exception:  # noqa: BLE001 - a bad listener must not kill the bus
-            LOG.exception("P2P signal listener failed")
-        return False
-
     async def _interface(self, path: str, name: str):
         node = await self._node(path)
         proxy = self._bus.get_proxy_object(BUS_NAME, path, node)
@@ -308,6 +297,18 @@ class DBusFastClient:
             node = await self._bus.introspect(BUS_NAME, path)
             self._nodes[path] = node
         return node
+
+    async def _subscribe(self, path: str, callback: Callable[[str, tuple[object, ...]], None]) -> None:
+        node = await self._node(path)
+        target = self._bus.get_proxy_object(BUS_NAME, path, node).get_interface(P2P_IFACE)
+        for member in P2P_SIGNAL_HANDLERS:
+            register = getattr(target, f"on_{_snake(member)}", None)
+            if register is None:
+                continue
+            # dbus-fast adds the D-Bus match rule on the first handler
+            # registration; a raw message handler would never receive these
+            # broadcast signals.
+            register(_signal_callback(member, callback))
 
     async def _get_property(self, path: str, interface: str, name: str):
         props = await self._interface(path, PROPERTIES_IFACE)
@@ -401,14 +402,18 @@ class DBusFastClient:
             raise DBusApiIncomplete(f"{path} has no WPS ConfigMethods property")
 
 
+_UNDERSCORER1 = re.compile(r"(.)([A-Z][a-z]+)")
+_UNDERSCORER2 = re.compile(r"([a-z0-9])([A-Z])")
+
+
 def _snake(name: str) -> str:
-    """Turn a D-Bus member name into the dbus-fast generated method suffix."""
-    out: list[str] = []
-    for char in name:
-        if char.isupper() and out:
-            out.append("_")
-        out.append(char.lower())
-    return "".join(out)
+    """Match dbus-fast's own member-name conversion exactly.
+
+    The generated proxy methods are named with this algorithm, so a different
+    split (``p_b_c`` instead of ``pbc``) silently misses ``on_*`` handlers.
+    """
+    subbed = _UNDERSCORER1.sub(r"\1_\2", name)
+    return _UNDERSCORER2.sub(r"\1_\2", subbed).lower()
 
 
 @dataclass(frozen=True)
@@ -849,3 +854,21 @@ def _check_arguments(node: object, interface: str, method: str, args: tuple[obje
         raise SupplicantError(
             f"{interface}.{method} arguments are invalid ({signature}): {exc}"
         ) from exc
+
+
+def _signal_callback(
+    member: str, callback: Callable[[str, tuple[object, ...]], None]
+) -> Callable[..., None]:
+    """Adapt a dbus-fast signal handler to ``(member, args)``.
+
+    Registered through the generated ``on_*`` methods: that is what makes
+    dbus-fast install the D-Bus match rule for these broadcast signals.
+    """
+
+    def handler(*args: object) -> None:
+        try:
+            callback(member, tuple(args))
+        except Exception:  # noqa: BLE001 - a bad listener must not kill the bus
+            LOG.exception("P2P signal listener failed")
+
+    return handler
