@@ -14,6 +14,7 @@ from dexonlinux.p2p.dbus import (
 
 DEVICE = "/fi/w1/wpa_supplicant1/Interfaces/1"
 GROUP_DEVICE = "/fi/w1/wpa_supplicant1/Interfaces/2"
+GROUP_OBJECT = "/fi/w1/wpa_supplicant1/Groups/1"
 
 
 class FakeDBusClient:

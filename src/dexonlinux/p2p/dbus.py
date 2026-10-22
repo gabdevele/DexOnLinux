@@ -13,6 +13,7 @@ coroutine scheduled on that loop.
 import asyncio
 import concurrent.futures
 import contextlib
+import ipaddress
 import logging
 import queue
 import threading
@@ -23,9 +24,9 @@ from typing import Protocol
 from dbus_fast import BusType, DBusError, Message, MessageType, Variant
 from dbus_fast.aio import MessageBus
 
-from dexonlinux.p2p.base import P2PError, Peer
+from dexonlinux.p2p.base import GroupInfo, P2PError, P2PRole, Peer
 from dexonlinux.p2p.control import SupplicantError, p2p_ctrl_name
-from dexonlinux.p2p.events import P2PEvent
+from dexonlinux.p2p.events import EventKind, P2PEvent
 from dexonlinux.p2p.wfd import WFD_IES
 
 LOG = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ ROOT_IFACE = "fi.w1.wpa_supplicant1"
 INTERFACE_IFACE = "fi.w1.wpa_supplicant1.Interface"
 P2P_IFACE = "fi.w1.wpa_supplicant1.Interface.P2PDevice"
 WPS_IFACE = "fi.w1.wpa_supplicant1.Interface.WPS"
+GROUP_IFACE = "fi.w1.wpa_supplicant1.Group"
 PROPERTIES_IFACE = "org.freedesktop.DBus.Properties"
 
 P2P_METHODS = ("Connect", "ExtendedListen", "Disconnect")
@@ -376,6 +378,7 @@ class WpaSupplicantDBus:
         self._client = client or DBusFastClient()
         self._device: str | None = None
         self._group_interface: str | None = None
+        self._negotiated_peer: Peer | None = None
         self._signals: queue.Queue[tuple[str, tuple[object, ...]]] = queue.Queue()
         self._open = False
 
@@ -401,6 +404,7 @@ class WpaSupplicantDBus:
         self._open = False
         self._device = None
         self._group_interface = None
+        self._negotiated_peer = None
 
     def prepare_wfd(self, *, go_intent: int, device_name: str) -> DBusWfdState:
         device = self._require_device()
@@ -509,15 +513,120 @@ class WpaSupplicantDBus:
             self._group_interface = None
 
     def pump(self, timeout: float) -> list[P2PEvent]:
+        events: list[P2PEvent] = []
         try:
-            member, _args = self._signals.get(timeout=timeout)
+            member, args = self._signals.get(timeout=timeout)
         except queue.Empty:
-            return []
-        LOG.debug("unmapped P2P signal %s", member)
-        return []
+            return events
+        self._map_signal(member, args, events)
+        while True:
+            try:
+                member, args = self._signals.get_nowait()
+            except queue.Empty:
+                return events
+            self._map_signal(member, args, events)
 
     def _on_signal(self, member: str, args: tuple[object, ...]) -> None:
+        # Runs on the D-Bus loop thread: only queue, never call back into D-Bus.
         self._signals.put((member, args))
+
+    def _map_signal(self, member: str, args: tuple[object, ...], events: list[P2PEvent]) -> None:
+        if member == "ProvisionDiscoveryPBCRequest":
+            peer = _peer_from_path(args[0] if args else None)
+            if peer is not None:
+                events.append(P2PEvent(EventKind.PBC_REQUEST, peer=peer, raw="ProvisionDiscoveryPBCRequest"))
+        elif member in {"ProvisionDiscoveryRequestDisplayPin", "ProvisionDiscoveryRequestEnterPin"}:
+            peer = _peer_from_path(args[0] if args else None)
+            events.append(P2PEvent(EventKind.PIN_REQUEST, peer=peer, raw=member))
+        elif member == "GONegotiationRequest":
+            peer = _peer_from_path(args[0] if args else None)
+            passwd_id = int(args[1]) if len(args) > 1 else None
+            events.append(
+                P2PEvent(EventKind.GO_NEGOTIATION, peer=peer, passwd_id=passwd_id, raw=member)
+            )
+        elif member == "GONegotiationSuccess":
+            props = _properties(args[0] if args else None)
+            peer = _peer_from_path(props.get("peer_object"))
+            self._negotiated_peer = peer
+            events.append(P2PEvent(EventKind.GO_NEGOTIATION_SUCCESS, peer=peer, raw=member))
+        elif member == "GONegotiationFailure":
+            props = _properties(args[0] if args else None)
+            events.append(
+                P2PEvent(
+                    EventKind.FAILURE,
+                    raw=f"GONegotiationFailure status={props.get('status', 'unknown')}",
+                )
+            )
+        elif member == "GroupStarted":
+            events.append(self._group_started(_properties(args[0] if args else None)))
+        elif member == "GroupFinished":
+            self._group_interface = None
+            self._negotiated_peer = None
+            events.append(P2PEvent(EventKind.GROUP_REMOVED, raw="P2P group finished"))
+        elif member == "InvitationReceived":
+            props = _properties(args[0] if args else None)
+            mac = _mac(props.get("go_dev_addr")) or _mac(props.get("sa"))
+            events.append(
+                P2PEvent(
+                    EventKind.INVITATION,
+                    peer=Peer(mac=mac) if mac else None,
+                    raw="P2P invitation received",
+                )
+            )
+        elif member == "DeviceFoundProperties":
+            path = args[0] if args else None
+            props = _properties(args[1] if len(args) > 1 else None)
+            peer = Peer(
+                mac=_mac_from_path(path) if isinstance(path, str) else "",
+                name=str(props.get("DeviceName", "")),
+                wfd=bool(props.get("IEs")),
+                path=path if isinstance(path, str) else "",
+            )
+            events.append(P2PEvent(EventKind.DEVICE_FOUND, peer=peer, raw=member))
+        else:
+            LOG.debug("ignoring P2P signal %s", member)
+
+    def _group_started(self, props: dict[str, object]) -> P2PEvent:
+        try:
+            interface = props.get("interface_object")
+            group_object = props.get("group_object")
+            role = P2PRole.GO if props.get("role") == "GO" else P2PRole.CLIENT
+            if not isinstance(interface, str):
+                raise ValueError("GroupStarted has no interface object")
+            ifname = self._client.get_property(interface, INTERFACE_IFACE, "Ifname")
+            if not isinstance(ifname, str) or not ifname:
+                raise ValueError("GroupStarted interface has no name")
+            frequency = (
+                self._client.get_property(group_object, GROUP_IFACE, "Frequency")
+                if isinstance(group_object, str)
+                else None
+            )
+
+            if role is P2PRole.CLIENT:
+                local_ip = _ipv4(props.get("IpAddr"))
+                peer_ip = _ipv4(props.get("IpAddrGo"))
+                prefix = _prefix(props.get("IpAddrMask"))
+                go_dev_addr = self._negotiated_peer.mac if self._negotiated_peer is not None else ""
+            else:
+                local_ip = None
+                peer_ip = None
+                prefix = 24
+                go_dev_addr = _mac(self._client.get_property(self._require_device(), P2P_IFACE, "DeviceAddress"))
+
+            group = GroupInfo(
+                ifname=ifname,
+                role=role,
+                local_ip=local_ip,
+                peer_ip=peer_ip,
+                local_prefix=prefix,
+                frequency=int(frequency) if isinstance(frequency, int) else None,
+                go_dev_addr=go_dev_addr,
+            )
+        except (SupplicantError, ValueError, TypeError) as exc:
+            return P2PEvent(EventKind.FAILURE, raw=f"could not read the started group: {exc}")
+
+        self._group_interface = interface
+        return P2PEvent(EventKind.GROUP_STARTED, group=group, raw="P2P group started")
 
     def _require_device(self) -> str:
         if self._device is None:
@@ -535,3 +644,52 @@ class WpaSupplicantDBus:
             action()
         except SupplicantError as exc:
             LOG.debug("%s failed: %s", description, exc)
+
+
+def _unwrap(value: object) -> object:
+    return value.value if isinstance(value, Variant) else value
+
+
+def _properties(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    return {key: _unwrap(item) for key, item in value.items()}
+
+
+def _mac(value: object) -> str:
+    if isinstance(value, (bytes, bytearray)) and len(value) == 6:
+        return ":".join(f"{byte:02x}" for byte in value)
+    if isinstance(value, str) and len(value) == 17 and value.count(":") == 5:
+        return value
+    return ""
+
+
+def _mac_from_path(path: object) -> str:
+    if not isinstance(path, str):
+        return ""
+    segment = path.rsplit("/", 1)[-1]
+    if len(segment) == 17 and segment.count("_") == 5:
+        return segment.replace("_", ":")
+    return ""
+
+
+def _peer_from_path(path: object) -> Peer | None:
+    if not isinstance(path, str) or not path:
+        return None
+    mac = _mac_from_path(path)
+    if not mac:
+        return None
+    return Peer(mac=mac, path=path)
+
+
+def _ipv4(value: object) -> str | None:
+    if isinstance(value, (bytes, bytearray)) and len(value) == 4:
+        return str(ipaddress.IPv4Address(bytes(value)))
+    return None
+
+
+def _prefix(mask: object) -> int:
+    if isinstance(mask, (bytes, bytearray)) and len(mask) == 4:
+        netmask = ipaddress.IPv4Address(bytes(mask))
+        return ipaddress.IPv4Network(f"0.0.0.0/{netmask}").prefixlen
+    return 24

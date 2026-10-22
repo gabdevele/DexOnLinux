@@ -1,18 +1,23 @@
 import pytest
 
-from dexonlinux.p2p.base import P2PError, Peer
+from dexonlinux.p2p.base import P2PError, P2PRole, Peer
 from dexonlinux.p2p.control import SupplicantError
 from dexonlinux.p2p.dbus import (
+    GROUP_IFACE,
+    INTERFACE_IFACE,
     P2P_IFACE,
     ROOT_IFACE,
     ROOT_PATH,
     WPS_IFACE,
     DBusWfdState,
     WpaSupplicantDBus,
+    _ipv4,
+    _prefix,
 )
+from dexonlinux.p2p.events import EventKind
 from dexonlinux.p2p.wfd import WFD_IES
 
-from .fake_dbus import DEVICE, GROUP_DEVICE, FakeDBusClient
+from .fake_dbus import DEVICE, GROUP_DEVICE, GROUP_OBJECT, FakeDBusClient
 
 
 def make_control(client=None):
@@ -143,3 +148,200 @@ def test_disconnect_uses_the_group_interface():
 
     assert client.calls == [(GROUP_DEVICE, P2P_IFACE, "Disconnect", ())]
     assert control._group_interface is None
+
+
+def started_control(client):
+    control = WpaSupplicantDBus("wlan0", client)
+    control.open()
+    return control
+
+
+def test_pbc_request_maps_to_event():
+    client = FakeDBusClient()
+    control = started_control(client)
+    peer_path = f"{DEVICE}/Peers/aa_bb_cc_dd_ee_ff"
+
+    client.emit("ProvisionDiscoveryPBCRequest", (peer_path,))
+    events = control.pump(0)
+
+    assert [event.kind for event in events] == [EventKind.PBC_REQUEST]
+    assert events[0].peer is not None
+    assert events[0].peer.mac == "aa:bb:cc:dd:ee:ff"
+    assert events[0].peer.path == peer_path
+
+
+def test_pin_request_maps_to_event():
+    client = FakeDBusClient()
+    control = started_control(client)
+
+    client.emit("ProvisionDiscoveryRequestDisplayPin", (f"{DEVICE}/Peers/aa_bb_cc_dd_ee_ff", "12345678"))
+    events = control.pump(0)
+
+    assert [event.kind for event in events] == [EventKind.PIN_REQUEST]
+
+
+def test_go_negotiation_request_maps_password_id():
+    client = FakeDBusClient()
+    control = started_control(client)
+
+    client.emit("GONegotiationRequest", (f"{DEVICE}/Peers/aa_bb_cc_dd_ee_ff", 4, 15))
+    events = control.pump(0)
+
+    assert [event.kind for event in events] == [EventKind.GO_NEGOTIATION]
+    assert events[0].passwd_id == 4
+    assert events[0].peer is not None
+
+
+def test_go_negotiation_success_maps_peer():
+    client = FakeDBusClient()
+    control = started_control(client)
+
+    client.emit(
+        "GONegotiationSuccess",
+        (
+            {
+                "peer_object": f"{DEVICE}/Peers/aa_bb_cc_dd_ee_ff",
+                "role_go": "client",
+                "frequency": 2437,
+            },
+        ),
+    )
+    events = control.pump(0)
+
+    assert [event.kind for event in events] == [EventKind.GO_NEGOTIATION_SUCCESS]
+    assert events[0].peer is not None
+    assert events[0].peer.mac == "aa:bb:cc:dd:ee:ff"
+
+
+def test_group_started_client_reads_ip_mask_and_go_address():
+    client = FakeDBusClient()
+    control = started_control(client)
+    client.properties[(GROUP_DEVICE, INTERFACE_IFACE, "Ifname")] = "p2p-wlan0-0"
+    client.properties[(GROUP_OBJECT, GROUP_IFACE, "Frequency")] = 2437
+    client.emit(
+        "GONegotiationSuccess",
+        ({"peer_object": f"{DEVICE}/Peers/aa_bb_cc_dd_ee_ff", "role_go": "client"},),
+    )
+
+    client.emit(
+        "GroupStarted",
+        (
+            {
+                "interface_object": GROUP_DEVICE,
+                "role": "client",
+                "group_object": GROUP_OBJECT,
+                "IpAddr": bytes([192, 168, 49, 200]),
+                "IpAddrMask": bytes([255, 255, 255, 0]),
+                "IpAddrGo": bytes([192, 168, 49, 1]),
+            },
+        ),
+    )
+    events = control.pump(0)
+
+    started = [event for event in events if event.kind is EventKind.GROUP_STARTED]
+    assert len(started) == 1
+    group = started[0].group
+    assert group is not None
+    assert group.ifname == "p2p-wlan0-0"
+    assert group.role is P2PRole.CLIENT
+    assert group.local_ip == "192.168.49.200"
+    assert group.peer_ip == "192.168.49.1"
+    assert group.local_prefix == 24
+    assert group.frequency == 2437
+    assert group.go_dev_addr == "aa:bb:cc:dd:ee:ff"
+
+
+def test_group_started_go_has_no_ip_properties():
+    client = FakeDBusClient()
+    control = started_control(client)
+    client.properties[(GROUP_DEVICE, INTERFACE_IFACE, "Ifname")] = "p2p-wlan0-0"
+    client.properties[(GROUP_OBJECT, GROUP_IFACE, "Frequency")] = 2437
+    client.properties[(DEVICE, P2P_IFACE, "DeviceAddress")] = bytes([0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff])
+
+    client.emit(
+        "GroupStarted",
+        (
+            {
+                "interface_object": GROUP_DEVICE,
+                "role": "GO",
+                "group_object": GROUP_OBJECT,
+            },
+        ),
+    )
+    events = control.pump(0)
+
+    group = events[0].group
+    assert group is not None
+    assert group.role is P2PRole.GO
+    assert group.local_ip is None
+    assert group.peer_ip is None
+    assert group.local_prefix == 24
+    assert group.go_dev_addr == "aa:bb:cc:dd:ee:ff"
+
+
+def test_group_finished_clears_group_state():
+    client = FakeDBusClient()
+    control = started_control(client)
+    client.properties[(GROUP_DEVICE, INTERFACE_IFACE, "Ifname")] = "p2p-wlan0-0"
+    client.properties[(GROUP_OBJECT, GROUP_IFACE, "Frequency")] = 2437
+    client.emit(
+        "GroupStarted",
+        ({"interface_object": GROUP_DEVICE, "role": "GO", "group_object": GROUP_OBJECT},),
+    )
+    control.pump(0)
+
+    client.emit(
+        "GroupFinished",
+        ({"interface_object": GROUP_DEVICE, "role": "GO", "group_object": GROUP_OBJECT},),
+    )
+    events = control.pump(0)
+
+    assert [event.kind for event in events] == [EventKind.GROUP_REMOVED]
+    assert control._group_interface is None
+
+
+def test_invitation_maps_to_event():
+    client = FakeDBusClient()
+    control = started_control(client)
+
+    client.emit("InvitationReceived", ({"go_dev_addr": bytes([0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff])},))
+    events = control.pump(0)
+
+    assert [event.kind for event in events] == [EventKind.INVITATION]
+    assert events[0].peer is not None
+    assert events[0].peer.mac == "aa:bb:cc:dd:ee:ff"
+
+
+def test_failure_maps_to_failure_event():
+    client = FakeDBusClient()
+    control = started_control(client)
+
+    client.emit("GONegotiationFailure", ({"status": 1},))
+    events = control.pump(0)
+
+    assert [event.kind for event in events] == [EventKind.FAILURE]
+    assert "status=1" in events[0].raw
+
+
+def test_device_found_properties_maps_to_event():
+    client = FakeDBusClient()
+    control = started_control(client)
+    peer_path = f"{DEVICE}/Peers/aa_bb_cc_dd_ee_ff"
+
+    client.emit(
+        "DeviceFoundProperties",
+        (peer_path, {"DeviceName": "Phone", "IEs": bytes([0x00, 0x00, 0x06])}),
+    )
+    events = control.pump(0)
+
+    assert [event.kind for event in events] == [EventKind.DEVICE_FOUND]
+    assert events[0].peer is not None
+    assert events[0].peer.name == "Phone"
+    assert events[0].peer.wfd is True
+
+
+def test_ipv4_and_prefix_helpers():
+    assert _ipv4(bytes([192, 168, 49, 1])) == "192.168.49.1"
+    assert _ipv4(None) is None
+    assert _prefix(bytes([255, 255, 255, 0])) == 24
+    assert _prefix(None) == 24
