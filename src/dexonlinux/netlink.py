@@ -67,7 +67,14 @@ class Pyroute2LinkOps:
     def list_links(self) -> list[str]:
         ipr = self._iproute_factory()
         try:
-            return [link["IFLA_IFNAME"] for link in ipr.link("dump") if link.get("IFLA_IFNAME")]
+            # pyroute2 messages expose IFLA_* through ``get``/attribute access,
+            # not through ``__getitem__``: indexing raises KeyError even when
+            # the attribute exists.
+            return [
+                name
+                for link in ipr.link("dump")
+                if isinstance(name := link.get("IFLA_IFNAME"), str) and name
+            ]
         finally:
             ipr.close()
 

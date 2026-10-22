@@ -3,6 +3,27 @@ import pytest
 from dexonlinux.netlink import LinkError, Pyroute2LinkOps
 
 
+class FakeLinkMessage(dict):
+    """Mimics pyroute2's ``ifinfmsg``.
+
+    Real netlink messages keep the IFLA_* attributes in an ``attrs`` list and
+    expose them through ``get``/attribute access. ``msg["IFLA_IFNAME"]`` raises
+    KeyError even when the attribute exists, so the fake must behave the same
+    way or the test cannot catch that mistake.
+    """
+
+    def __init__(self, index, flags, ifname):
+        super().__init__(index=index, flags=flags, attrs=[("IFLA_IFNAME", ifname)])
+
+    def get(self, key, default=None):
+        if key in self:
+            return dict.__getitem__(self, key)
+        for name, value in self["attrs"]:
+            if name == key:
+                return value
+        return default
+
+
 class FakeIPRoute:
     def __init__(self, links=None):
         # name -> {"index": int, "flags": int}
@@ -23,13 +44,13 @@ class FakeIPRoute:
         self.calls.append(("link", command, kwargs))
         if command == "dump":
             return [
-                {"index": link["index"], "flags": link["flags"], "IFLA_IFNAME": name}
+                FakeLinkMessage(link["index"], link["flags"], name)
                 for name, link in self.links.items()
             ]
         if command == "get":
             for name, link in self.links.items():
                 if link["index"] == kwargs["index"]:
-                    return [{"index": link["index"], "flags": link["flags"], "IFLA_IFNAME": name}]
+                    return [FakeLinkMessage(link["index"], link["flags"], name)]
             raise KeyError(kwargs["index"])
         return []
 
