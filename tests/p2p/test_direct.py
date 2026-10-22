@@ -4,6 +4,7 @@ import pytest
 
 from dexonlinux.p2p.base import GroupNetwork, P2PError, P2PRole
 from dexonlinux.p2p.direct import DirectBackend
+from dexonlinux.p2p.events import parse_event
 
 
 class FakeCtrl:
@@ -25,7 +26,7 @@ class FakeCtrl:
 
     def pump(self, timeout):
         if self.events:
-            return [self.events.pop(0)]
+            return [parse_event(self.events.pop(0))]
         return []
 
 

@@ -6,7 +6,7 @@ from dataclasses import replace
 
 from dexonlinux.p2p.base import DEFAULT_P2P_FREQ, GO_NETWORK, GroupInfo, GroupNetwork, P2PError, P2PRole
 from dexonlinux.p2p.dhcp import DhcpServer
-from dexonlinux.p2p.events import EventKind, parse_event
+from dexonlinux.p2p.events import EventKind
 from dexonlinux.p2p.link import LinkConfigurator
 from dexonlinux.p2p.supplicant import SupplicantControl, SupplicantError
 from dexonlinux.p2p.wfd import WfdConfigurator, WfdState
@@ -57,10 +57,7 @@ class DirectBackend:
     def connect(self, stop: threading.Event, timeout: float = CONNECT_TIMEOUT) -> GroupInfo:
         deadline = time.monotonic() + timeout
         while not stop.is_set() and time.monotonic() < deadline:
-            for line in self._ctrl.pump(0.5):
-                event = parse_event(line)
-                if event is None:
-                    continue
+            for event in self._ctrl.pump(0.5):
                 if event.kind is EventKind.PBC_REQUEST:
                     if event.peer is not None:
                         self._connect_pbc(event.peer.mac)

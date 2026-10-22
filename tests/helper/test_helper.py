@@ -3,6 +3,7 @@ from pathlib import Path
 
 from dexonlinux.helper.service import serve
 from dexonlinux.p2p.base import GroupInfo, P2PError, P2PRole
+from dexonlinux.p2p.events import parse_event
 
 
 class FakeCtrl:
@@ -13,7 +14,7 @@ class FakeCtrl:
 
     def pump(self, timeout):
         if self.lines:
-            return [self.lines.pop(0)]
+            return [parse_event(self.lines.pop(0))]
         return []
 
 

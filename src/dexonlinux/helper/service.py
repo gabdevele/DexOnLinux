@@ -18,7 +18,7 @@ from dexonlinux.nm import NetworkManagerSuspension
 from dexonlinux.p2p.base import DEFAULT_P2P_FREQ, GroupInfo, P2PBackend, P2PError, P2PRole
 from dexonlinux.p2p.dhcp import DhcpServer
 from dexonlinux.p2p.direct import DirectBackend
-from dexonlinux.p2p.events import EventKind, parse_event
+from dexonlinux.p2p.events import EventKind
 from dexonlinux.p2p.link import LinkConfigurator
 from dexonlinux.p2p.supplicant import SupplicantControl, SupplicantError, find_ctrl_socket
 from dexonlinux.p2p.wfd import WfdConfigurator
@@ -49,9 +49,8 @@ def serve(
         group: GroupInfo = backend.connect(stop)
         emitter("group_started", asdict(group))
         while not stop.is_set():
-            for line in ctrl.pump(0.5):
-                event = parse_event(line)
-                if event is not None and event.kind is EventKind.GROUP_REMOVED:
+            for event in ctrl.pump(0.5):
+                if event.kind is EventKind.GROUP_REMOVED:
                     emitter("group_finished", {"reason": event.raw})
                     return 0
         return 0

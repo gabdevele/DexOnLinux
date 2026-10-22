@@ -2,7 +2,7 @@
 
 The system supplicant is owned by NetworkManager; this client only talks to
 the dedicated P2P-device socket. It never stops or reconfigures the supplicant
-service.
+service. It is the fallback transport for hosts whose D-Bus API is incomplete.
 """
 
 import logging
@@ -13,6 +13,11 @@ import socket
 import time
 from pathlib import Path
 
+from dexonlinux.p2p.base import Peer
+from dexonlinux.p2p.control import SupplicantError
+from dexonlinux.p2p.events import EventKind, P2PEvent, parse_event
+from dexonlinux.p2p.wfd import WfdConfigurator, WfdState
+
 LOG = logging.getLogger(__name__)
 
 CTRL_DIR = Path("/run/wpa_supplicant")
@@ -20,10 +25,6 @@ IFNAMSIZ = 16
 DEFAULT_TIMEOUT = 2.0
 MAX_REPLY_BYTES = 4096
 _PRIORITY = re.compile(r"^<\d+>")
-
-
-class SupplicantError(RuntimeError):
-    """The control socket is missing, closed, or did not answer."""
 
 
 def p2p_ctrl_name(interface: str) -> str:
@@ -77,6 +78,7 @@ class SupplicantControl:
         self.path = Path(path)
         self._sock: socket.socket | None = None
         self._events: queue.Queue[str] = queue.Queue()
+        self._group_ifname: str | None = None
 
     def open(self) -> None:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
@@ -118,21 +120,55 @@ class SupplicantControl:
             return text
         raise SupplicantError(f"no reply to {command!r} within {timeout:.1f}s")
 
-    def pump(self, timeout: float) -> list[str]:
+    def prepare_wfd(self, *, go_intent: int, device_name: str) -> WfdState:
+        return WfdConfigurator().apply(self, go_intent=go_intent, device_name=device_name)
+
+    def restore_wfd(self, state: object) -> None:
+        if not isinstance(state, WfdState):
+            LOG.debug("ignoring an unknown WFD state: %r", state)
+            return
+        WfdConfigurator().restore(self, state)
+
+    def start_extended_listen(self, period_ms: int, interval_ms: int) -> None:
+        self.command(f"P2P_EXT_LISTEN {period_ms} {interval_ms}")
+
+    def stop_extended_listen(self) -> None:
+        self.command("P2P_EXT_LISTEN")
+
+    def connect(self, peer: Peer, *, frequency: int, go_intent: int) -> None:
+        self.command(f"P2P_CONNECT {peer.mac} pbc freq={frequency} go_intent={go_intent}")
+
+    def disconnect(self) -> None:
+        if self._group_ifname is None:
+            return
+        self.command(f"P2P_GROUP_REMOVE {self._group_ifname}")
+        self._group_ifname = None
+
+    def pump(self, timeout: float) -> list[P2PEvent]:
         """Return queued events, waiting at most ``timeout`` for new ones."""
         lines = self._drain_events()
-        if lines:
-            return lines
+        if not lines:
+            data = self._recv(timeout)
+            if data is None:
+                return []
+            text = data.decode("utf-8", "replace")
+            if _looks_like_event(text):
+                self._queue_events(text)
+            else:
+                LOG.debug("CTRL (unsolicited reply) << %s", text.strip())
+            lines = self._drain_events()
 
-        data = self._recv(timeout)
-        if data is None:
-            return []
-        text = data.decode("utf-8", "replace")
-        if _looks_like_event(text):
-            self._queue_events(text)
-        else:
-            LOG.debug("CTRL (unsolicited reply) << %s", text.strip())
-        return self._drain_events()
+        events: list[P2PEvent] = []
+        for line in lines:
+            event = parse_event(line)
+            if event is None:
+                continue
+            if event.kind is EventKind.GROUP_STARTED and event.group is not None:
+                self._group_ifname = event.group.ifname
+            elif event.kind is EventKind.GROUP_REMOVED:
+                self._group_ifname = None
+            events.append(event)
+        return events
 
     def _recv(self, timeout: float) -> bytes | None:
         if self._sock is None:

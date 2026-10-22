@@ -51,6 +51,8 @@ class Peer:
     mac: str
     name: str = ""
     wfd: bool = False
+    # D-Bus object path of the peer; empty for the control-socket transport.
+    path: str = ""
 
 
 @dataclass(frozen=True)

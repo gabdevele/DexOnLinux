@@ -1,9 +1,10 @@
 import logging
 import struct
 from dataclasses import dataclass
+from typing import Protocol
 
 from dexonlinux.p2p.base import P2PError
-from dexonlinux.p2p.supplicant import SupplicantControl, SupplicantError
+from dexonlinux.p2p.control import SupplicantError
 from dexonlinux.wfd.rtsp import RTSP_PORT
 
 LOG = logging.getLogger(__name__)
@@ -12,18 +13,24 @@ _DEVICE_INFORMATION = 0x0011  # primary sink, session available
 _MAX_THROUGHPUT = 0x00C8  # units of 0.5 Mbps
 
 
+class CommandControl(Protocol):
+    """The single method the WFD configurator needs from a transport."""
+
+    def command(self, command: str, timeout: float = 2.0) -> str: ...
+
+
 def build_device_info_ie(
     device_information: int = _DEVICE_INFORMATION,
     session_port: int = RTSP_PORT,
     max_throughput: int = _MAX_THROUGHPUT,
-) -> str:
-    """Encode the WFD Device Information subelement as a hex string.
+) -> bytes:
+    """Encode the WFD Device Information subelement.
 
     Layout: ``[id u8][length u16 BE][device info u16][RTSP port u16][max
     throughput u16]``.
     """
     value = struct.pack("!HHH", device_information, session_port, max_throughput)
-    return "00" + "0006" + value.hex()
+    return b"\x00" + struct.pack("!H", 6) + value
 
 
 WFD_IES = build_device_info_ie()
@@ -38,10 +45,7 @@ class WfdState:
 
 
 class WfdConfigurator:
-    def __init__(self, go_intent: int = 0) -> None:
-        self._go_intent = go_intent
-
-    def apply(self, ctrl: SupplicantControl, device_name: str = "DexOnLinux") -> WfdState:
+    def apply(self, ctrl: CommandControl, *, go_intent: int, device_name: str) -> WfdState:
         state = WfdState(
             wifi_display=self._get(ctrl, "GET wifi_display", "0"),
             go_intent=self._get(ctrl, "GET p2p_go_intent", "7"),
@@ -53,8 +57,8 @@ class WfdConfigurator:
             # WFD_SUBELEM_SET only stores IEs; they are dropped while
             # wifi_display is false, so enable WFD first.
             self._send(ctrl, "SET wifi_display 1", required=True)
-            self._send(ctrl, f"WFD_SUBELEM_SET all {WFD_IES}", required=True)
-            self._send(ctrl, f"SET p2p_go_intent {self._go_intent}")
+            self._send(ctrl, f"WFD_SUBELEM_SET all {WFD_IES.hex()}", required=True)
+            self._send(ctrl, f"SET p2p_go_intent {go_intent}")
             self._send(ctrl, f"SET device_name {device_name}")
             self._send(ctrl, "SET config_methods 0x80", required=True)
         except P2PError:
@@ -64,7 +68,7 @@ class WfdConfigurator:
             raise
         return state
 
-    def restore(self, ctrl: SupplicantControl, state: WfdState) -> None:
+    def restore(self, ctrl: CommandControl, state: WfdState) -> None:
         self._send(ctrl, "P2P_EXT_LISTEN")
         self._send(ctrl, "WFD_SUBELEM_SET 0 ")
         if state.wifi_display != "1":
@@ -76,7 +80,7 @@ class WfdConfigurator:
             self._send(ctrl, f"SET device_name {state.device_name}")
 
     @staticmethod
-    def _get(ctrl: SupplicantControl, command: str, default: str) -> str:
+    def _get(ctrl: CommandControl, command: str, default: str) -> str:
         try:
             return ctrl.command(command).strip() or default
         except SupplicantError as exc:
@@ -84,7 +88,7 @@ class WfdConfigurator:
             return default
 
     @staticmethod
-    def _send(ctrl: SupplicantControl, command: str, *, required: bool = False) -> str:
+    def _send(ctrl: CommandControl, command: str, *, required: bool = False) -> str:
         try:
             reply = ctrl.command(command)
         except SupplicantError as exc:
