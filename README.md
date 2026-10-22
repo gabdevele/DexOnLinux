@@ -163,8 +163,9 @@ uv run --only-group dev python -m build
 uv run --only-group dev python -m twine check dist/*
 ```
 
-The product CLI always starts the helper with `--role go`; the helper also
-accepts `--role client` for diagnostics (`python -m dexonlinux.helper --help`).
+The product CLI always starts the helper with `--role go`; the helper module
+also accepts `--role client` for diagnostics (`python -m
+dexonlinux.helper.service --help`).
 
 The research reports and decision records live under `docs/research/`; the
 product code is under `src/dexonlinux/`.

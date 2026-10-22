@@ -3,10 +3,10 @@
 import argparse
 import getpass
 import logging
-import sys
+
+from colorama import Fore
 
 from dexonlinux.console import (
-    Fore,
     colored,
     confirm,
     print_adb_instructions,
@@ -243,7 +243,3 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:
         LOG.exception("Unexpected error")
         return 1
-
-
-if __name__ == "__main__":
-    sys.exit(main())

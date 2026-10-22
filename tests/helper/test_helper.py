@@ -1,7 +1,7 @@
 import threading
 from pathlib import Path
 
-from dexonlinux.helper.__main__ import serve
+from dexonlinux.helper.service import serve
 from dexonlinux.p2p.base import GroupInfo, P2PError, P2PRole
 
 

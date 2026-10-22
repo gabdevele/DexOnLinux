@@ -1,4 +1,8 @@
-"""Privileged helper: owns the supplicant ctrl socket and the P2P group."""
+"""Privileged helper process: owns the P2P control connection and the group.
+
+It reports machine-readable JSON events on stdout and never stops or
+reconfigures the system supplicant service.
+"""
 
 import argparse
 import json
@@ -10,16 +14,12 @@ from collections.abc import Callable
 from dataclasses import asdict
 
 from dexonlinux.nm import NetworkManagerSuspension
-from dexonlinux.p2p.base import DEFAULT_P2P_FREQ, GroupInfo, P2PError, P2PRole
+from dexonlinux.p2p.base import DEFAULT_P2P_FREQ, GroupInfo, P2PBackend, P2PError, P2PRole
 from dexonlinux.p2p.dhcp import DhcpServer
 from dexonlinux.p2p.direct import DirectBackend
 from dexonlinux.p2p.events import EventKind, parse_event
 from dexonlinux.p2p.link import LinkConfigurator
-from dexonlinux.p2p.supplicant import (
-    SupplicantControl,
-    SupplicantError,
-    find_ctrl_socket,
-)
+from dexonlinux.p2p.supplicant import SupplicantControl, SupplicantError, find_ctrl_socket
 from dexonlinux.p2p.wfd import WfdConfigurator
 from dexonlinux.system import CommandError, SubprocessRunner
 
@@ -32,7 +32,7 @@ def emit(event: str, data: dict[str, object]) -> None:
 
 
 def serve(
-    backend,
+    backend: P2PBackend,
     ctrl: SupplicantControl,
     stop: threading.Event,
     emitter: Emitter,
@@ -61,6 +61,7 @@ def serve(
         return 0
     except Exception as exc:  # noqa: BLE001 - report unexpected helper failures
         if not stop.is_set():
+            LOG.exception("unexpected helper failure")
             emitter("error", {"code": exc.__class__.__name__, "message": str(exc)})
             return 1
         return 0

@@ -141,14 +141,14 @@ def build_helper_command(
 ) -> list[str]:
     """Build the privileged helper command for this package.
 
-    The helper always runs from the current interpreter. Picking a
-    ``dexonlinux-linkd`` executable from PATH could silently pair the CLI
-    with a different version of the JSON protocol.
+    The helper must run from the same interpreter as the CLI: another
+    installation on PATH could pair this client with a different JSON
+    protocol.
     """
     command = [
         sys.executable,
         "-m",
-        "dexonlinux.helper",
+        "dexonlinux.helper.service",
         "--interface",
         interface,
         "--role",

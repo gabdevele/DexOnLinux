@@ -7,12 +7,11 @@ from dexonlinux.helper.client import HelperClient, build_helper_command
 from dexonlinux.p2p.base import P2PError, P2PRole
 
 
-def test_build_helper_command_uses_role_frequency_and_suspend(monkeypatch):
-    monkeypatch.setattr("shutil.which", lambda _name: "/usr/local/bin/dexonlinux-linkd")
+def test_build_helper_command_uses_role_frequency_and_suspend():
     command = build_helper_command("wlp-test", role=P2PRole.GO, frequency=2412, suspend_nm=True, sudo_password="x")
     assert command[:3] == ["sudo", "-S", "-p"]
-    assert "dexonlinux.helper" in command
-    assert "/usr/local/bin/dexonlinux-linkd" not in command
+    assert command[4:6] == [sys.executable, "-m"]
+    assert command[6] == "dexonlinux.helper.service"
     assert command[command.index("--role") + 1] == "go"
     assert command[command.index("--p2p-freq") + 1] == "2412"
     assert command[-1] == "--suspend-nm"

@@ -29,7 +29,6 @@ dependencies = [
 
 [project.scripts]
 dexonlinux = "dexonlinux.main:main"
-dexonlinux-linkd = "dexonlinux.helper.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/gabdevele/DexOnLinux"
